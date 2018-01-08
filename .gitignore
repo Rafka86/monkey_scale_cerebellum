@@ -1,0 +1,4 @@
+obj/
+main
+*.log
+kernel.sc2/
