@@ -8,6 +8,7 @@
 #include <mpi.h>
 
 #define MAX_DEVICE_IDS (8)
+#define WORK_UNIT_SIZE (15872) //1984PE * 8Thread
 
 //#include "param.h"
 #define MAX_BINARY_SIZE (0x1000000)
@@ -86,7 +87,47 @@ int main (int argc, char *argv[]) {
   pzcl_command_queue queue = pzclCreateCommandQueue(context, device[device_id], 0, &err);
   if (err) Error("pzclCreateCommandQueue: %d\n", err);
 
+  // Set data
+  int n = 10;
+  float* a = (float*)malloc(sizeof(float) * n);
+  for (int i = 0; i < n; i++) a[i] = 1.0;
+  pzcl_mem dev_a = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(float) * n, NULL, &err);
+  if (err) Error("pzclCreateBuffer: %d\n", err);
+  err = pzclEnqueueWriteBuffer(queue, dev_a, PZCL_TRUE, 0, sizeof(float) * n, a, 0, NULL, NULL);
+  if (err) Error("pzclEnqueueWriteBuffer: %d\n", err);
+  float* b = (float*)malloc(sizeof(float) * n);
+  for (int i = 0; i < n; i++) b[i] = 1.0;
+  pzcl_mem dev_b = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(float) * n, NULL, &err);
+  if (err) Error("pzclCreateBuffer %d\n", err);
+  err = pzclEnqueueWriteBuffer(queue, dev_b, PZCL_TRUE, 0, sizeof(float) * n, b, 0, NULL, NULL);
+  if (err) Error("pzclEnqueueWriteBuffer: %d\n", err);
+  float res;
+  pzcl_mem dev_res = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(float), NULL, &err);
+  if (err) Error("pzclCreateBuffer %d\n", err);
+
+  pzclSetKernelArg(kernel, 0, sizeof(int), &n);
+  pzclSetKernelArg(kernel, 1, sizeof(pzcl_mem), &dev_a);
+  pzclSetKernelArg(kernel, 2, sizeof(pzcl_mem), &dev_b);
+  pzclSetKernelArg(kernel, 3, sizeof(pzcl_mem), &dev_res);
+
+  size_t work_unit_size = WORK_UNIT_SIZE;
+  pzcl_event event = NULL;
+  err = pzclEnqueueNDRangeKernel(queue, kernel, 1, NULL, &work_unit_size, NULL, 0, NULL, &event);
+  if (err) Error("pzclEnqueueNDRangeKernel: %d\n", err);
+  if (event) {
+    err = pzclWaitForEvents(1, &event);
+    if (err) Error("pzclWaitForEvents: %d in trial.\n", err);
+  }
+  err = pzclEnqueueReadBuffer(queue, dev_res, PZCL_TRUE, 0, sizeof(float), &res, 0, NULL, NULL);
+  if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
+  printf("%f\n", res);
+  free(a);
+  free(b);
+
   // Release PZCL Resources
+  pzclReleaseMemObject(dev_a);
+  pzclReleaseMemObject(dev_b);
+  pzclReleaseMemObject(dev_res);
   pzclReleaseCommandQueue(queue);
   pzclReleaseKernel(kernel);
   pzclReleaseProgram(program);

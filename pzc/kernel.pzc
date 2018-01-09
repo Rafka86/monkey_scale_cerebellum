@@ -1,3 +1,15 @@
 #include <pzc_builtin.h>
 
-void pzc_kernel ( void ) { return; }
+void pzc_kernel (const   int  n,
+                 const float* a,
+                 const float* b,
+                       float* res) {
+  if (get_tid() == 0 && get_pid() == 0) {
+    auto tmp = 0.0f;
+    for (int i = 0; i < n; i++)
+      tmp += a[i] * b[i];
+    *res = tmp;
+  }
+  flush();
+  return;
+}
