@@ -117,15 +117,15 @@ int main (int argc, char *argv[]) {
   err = pzclEnqueueWriteBuffer(queue, dev_g_ahp, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_ahp, 0, NULL, NULL);
   if (err) Error("pzclEnqueueWriteBuffer:%d g_ahp\n", err);
 
-  char* spikep_buf = (char*)malloc(sizeof(char) * WORK_UNIT_SIZE * T_I);
+  char* spikep_buf = (char*)malloc(sizeof(char) * N_ALL_P * T_I);
   if (spikep_buf == NULL) Error("failed malloc spikep_buf\n");
-  for (int i = 0; i < WORK_UNIT_SIZE * T_I; i++) spikep_buf[i] = 0;
-  pzcl_mem dev_spikep_buf = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(char) * WORK_UNIT_SIZE * T_I, NULL, &err);
+  for (int i = 0; i < N_ALL_P * T_I; i++) spikep_buf[i] = 0;
+  pzcl_mem dev_spikep_buf = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(char) * N_ALL_P * T_I, NULL, &err);
   if (err) Error("pzclCreateBuffer:%d dev_spikep_buf\n", err);
-  err = pzclEnqueueWriteBuffer(queue, dev_spikep_buf, PZCL_TRUE, 0, sizeof(char) * WORK_UNIT_SIZE * T_I, spikep_buf, 0, NULL, NULL);
+  err = pzclEnqueueWriteBuffer(queue, dev_spikep_buf, PZCL_TRUE, 0, sizeof(char) * N_ALL_P * T_I, spikep_buf, 0, NULL, NULL);
   if (err) Error("pzclEnqueueWriteBuffer:%d spikep_buf\n", err);
 
-  char* h_spikep_buf = (char*)malloc(sizeof(char) * WORK_UNIT_SIZE * N_PERIOD);
+  char* h_spikep_buf = (char*)malloc(sizeof(char) * N_ALL_P * N_PERIOD);
 
   size_t work_unit_size = WORK_UNIT_SIZE;
   pzcl_event event = NULL;
@@ -157,14 +157,14 @@ int main (int argc, char *argv[]) {
         if (err) Error("pzclWaitForEvents: %d in trial.\n", err);
       }
 
-      err = pzclEnqueueReadBuffer(queue, dev_spikep_buf, PZCL_TRUE, 0, sizeof(char) * WORK_UNIT_SIZE * T_I, spikep_buf, 0, NULL, NULL);
+      err = pzclEnqueueReadBuffer(queue, dev_spikep_buf, PZCL_TRUE, 0, sizeof(char) * N_ALL_P * T_I, spikep_buf, 0, NULL, NULL);
       if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
       if (spikep_buf == NULL) Error("Enpty spikep_buf.\n");
 
       for (int t_i = 0; t_i < T_I; t_i++) {
         int t_each = t_e + t_i;
-        for (int i = 0; i < WORK_UNIT_SIZE; i++) {
-          h_spikep_buf[WORK_UNIT_SIZE * t_each + i] = spikep_buf[WORK_UNIT_SIZE * t_i + i];
+        for (int i = 0; i < N_ALL_P; i++) {
+          h_spikep_buf[t_each * N_ALL_P + i] = spikep_buf[t_i * N_ALL_P + i];
         }
       }
     }
@@ -174,8 +174,8 @@ int main (int argc, char *argv[]) {
       fprintf(stderr, "time: %f msec\n", elapsed_time);
 
       for (int t = 0; t < N_PERIOD; t++) {
-        for (int i = 0; i < WORK_UNIT_SIZE; i++)
-          if (h_spikep_buf[t * WORK_UNIT_SIZE + i] != 0) fprintf(fgr_spk, "%d %d\n", t, i);
+        for (int i = 0; i < N_ALL_P; i++)
+          if (h_spikep_buf[t * N_ALL_P + i] != 0) fprintf(fgr_spk, "%d %d\n", t, i);
       }
       fclose(fgr_spk);
     }
