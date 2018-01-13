@@ -12,30 +12,50 @@ static inline unsigned short get_spike(unsigned long s, int i) {
 static inline void set_spike(unsigned long* s, int i, int x) {
   *s = (unsigned long)(x) * (*s | (1UL << i)) + (unsigned long)(!x) * (*s & ~(1UL << i));
 }
+static inline float genrand(unsigned int* seed) {
+  *seed = (*seed) * 1566083941 + 1;
+  return (float)(((*seed) >> 16) * (1.52587890625e-05f)); //(1.0f/65536)
+}
 
-static void update_gr(const int pid, const int tid, const int index, const int t_i,
-                      float* u, float* g_ahp, unsigned long* s_gr,
-                      char* spkp_buf, unsigned char* wbuf) {
+static void update_gr(const int pid, const int tid, const int index, const int t_e, const int t_i,
+                      unsigned int* seeds, float* u, float* g_ex, float* g_ahp,
+                      unsigned long* s_gr, unsigned char* wbuf) {
   auto wbuf_i = 7 - tid;
+  auto mf_firing_rate = 0.03f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD));
   for (auto i = pid; i < N_S_GR; i += MAX_PID) {
     auto spk_block = s_gr[i];
     wbuf[wbuf_i] = 0;
     for (auto j = 0; j < 8; j++) {
       auto spk = get_spike(spk_block, tid * 8 + j);
-      auto target_neuronID = i * 64 + tid * 8 + j;
-      auto l_u   = u[target_neuronID];
-      auto l_g_ahp = g_ahp[target_neuronID];
+      auto target_neuron_id = i * 64 + tid * 8 + j;
+      auto l_u     = u[target_neuron_id];
+      auto l_g_ex  = g_ex[target_neuron_id];
+      auto l_g_ahp = g_ahp[target_neuron_id];
+      auto seed    = seeds[target_neuron_id];
+
+      // update conductances
       l_g_ahp = l_g_ahp * DECAY_AHP_GR * (!spk) + spk;
+      l_g_ex *= DECAY_AMPA_GRMF;
+      auto sum = 0;
+      for (auto k = 0; k < N_MF_PER_GR; k++)
+        sum += genrand(&seed) < (mf_firing_rate * (k == 0) + 0.005 * (k != 0));
+      l_g_ex += LAMBDA * R_AMPA_GRMF * (float)sum;
+
+      // update v
       auto du1 = DT * INV_C_GR * (-GBAR_LEAK_GR           * (l_u - E_LEAK_GR)
+                                  -GBAR_EX_GR   * l_g_ex  * (l_u - E_EX_GR)
                                   -GBAR_AHP_GR  * l_g_ahp * (l_u - E_AHP_GR)
-                                  +I_GR_EX);
+                                  +I_EX_GR);
       auto du2 = DT * INV_C_GR * (-GBAR_LEAK_GR           * (l_u + du1 - E_LEAK_GR)
+                                  -GBAR_EX_GR   * l_g_ex  * (l_u + du1 - E_EX_GR)
                                   -GBAR_AHP_GR  * l_g_ahp * (l_u + du1 - E_AHP_GR)
-                                  +I_GR_EX);
+                                  +I_EX_GR);
       l_u += 0.5f * (du1 + du2);
       spk = l_u > TH_GR;
-      u[target_neuronID] = E_LEAK_GR * spk + l_u * (!spk);
-      g_ahp[target_neuronID] = l_g_ahp;
+      u[target_neuron_id]     = E_LEAK_GR * spk + l_u * (!spk);
+      g_ex[target_neuron_id]  = l_g_ex;
+      g_ahp[target_neuron_id] = l_g_ahp;
+      seeds[target_neuron_id] = seed;
       wbuf[wbuf_i] |= (spk << j);
     }
     sync_L1();
@@ -50,10 +70,9 @@ static void store_spikes(const int pid, const int tid, const int index, const in
   flush_L1();
 }
 
-void pzc_kernel (unsigned  long* s_gr,
-                          float* u,
-                          float* g_ahp,
-                           char* spikep_buf) {
+void pzc_kernel (unsigned int* seeds, unsigned  long* s_gr,
+                 float* u, float* g_ex, float* g_ahp,
+                 char* spikep_buf, const int t_e) {
   auto tid = get_tid();
   auto pid = get_pid();
   auto index = tid + MAX_TID * pid;
@@ -61,7 +80,7 @@ void pzc_kernel (unsigned  long* s_gr,
   unsigned char* working_buf = (unsigned char*)(0x4000);
 
   for (auto t_i = 0; t_i < T_I; t_i++) {
-    update_gr(pid, tid, index, t_i, u, g_ahp, s_gr, spikep_buf, working_buf);
+    update_gr(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_ahp, s_gr, working_buf);
     flush_L2();
     store_spikes(pid, tid, index, t_i, spikep_buf, s_gr);
     flush_L2();
