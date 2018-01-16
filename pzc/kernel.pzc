@@ -12,6 +12,16 @@ static inline unsigned short get_spike(unsigned long s, int i) {
 static inline void set_spike(unsigned long* s, int i, int x) {
   *s = (unsigned long)(x) * (*s | (1UL << i)) + (unsigned long)(!x) * (*s & ~(1UL << i));
 }
+static inline int popl(unsigned long x) {
+  x = (x & 0x5555555555555555) + ((x >>  1) & 0x5555555555555555);
+  x = (x & 0x3333333333333333) + ((x >>  2) & 0x3333333333333333);
+  x = (x & 0x0F0F0F0F0F0F0F0F) + ((x >>  4) & 0x0F0F0F0F0F0F0F0F);
+  x = (x & 0x00FF00FF00FF00FF) + ((x >>  8) & 0x00FF00FF00FF00FF);
+  x = (x & 0x0000FFFF0000FFFF) + ((x >> 16) & 0x0000FFFF0000FFFF);
+  x = (x & 0x00000000FFFFFFFF) + ((x >> 32) & 0x00000000FFFFFFFF);
+  
+  return x & 0x000000000000007F;
+}
 static inline float genrand(unsigned int* seed) {
   *seed = (*seed) * 1566083941 + 1;
   return (float)(((*seed) >> 16) * (1.52587890625e-05f)); //(1.0f/65536)
@@ -64,15 +74,72 @@ static void update_gr(const int pid, const int tid, const int index, const int t
   }
 }
 
+static void update_go(const int pid, const int tid, const int index, const int t_e, const int t_i,
+                      const unsigned int* seeds, float* u, float* g_ex, float* g_ahp, unsigned char* s_go,
+                      const unsigned short* list_gogr, const unsigned long* s_gr,
+                      float* wbuf) {
+  auto seed = seeds[index];
+  for (auto i = pid; i < N_GO; i += MAX_PID) {
+    auto target_neuron_id = i + N_GR;
+
+    wbuf[tid] = 0.0f;
+    for (auto j = tid; j < N_GR_PER_GO; j++) {
+      auto idx = list_gogr[i * N_GO + j];
+      auto sp = &s_gr[idx * 16];
+      auto spikes_gr = 0;
+      for (auto k = 0; k < 16; k++)
+        spikes_gr += popl(sp[k]);
+      for (auto k = 0; k < spikes_gr; k++) {
+        auto rnd = genrand(&seed);
+        wbuf[tid] += (1.0f             * (rnd < 0.25f)
+                     +DECAY_AMPA_GOGR  * (0.25f <= rnd && rnd < 0.5f)
+                     +DECAY_AMPA_GOGR2 * (0.5f <= rnd && rnd < 0.75f)
+                     +DECAY_AMPA_GOGR3 * (0.75f <= rnd));
+      }
+    }
+    sync_L1();
+    if (tid == 0) {
+      auto spk     = s_go[target_neuron_id - N_GR];
+      auto l_u     = u[target_neuron_id];
+      auto l_g_ex  = g_ex[target_neuron_id];
+      auto l_g_ahp = g_ahp[target_neuron_id];
+
+      // update conductances
+      l_g_ex *= DECAY_AMPA_GOGR;
+      l_g_ex += wbuf[0] + wbuf[1] + wbuf[2] + wbuf[3];
+      l_g_ahp = l_g_ahp * DECAY_AHP_GO * (!spk) + spk;
+
+      // update v
+      auto du1 = DT * INV_C_GO * (-GBAR_LEAK_GO                        * (l_u - E_LEAK_GO)
+                                  -GBAR_EX_GO   * KAPPA_GOGR * l_g_ex  * (l_u - E_EX_GO)
+                                  -GBAR_AHP_GO               * l_g_ahp * (l_u - E_AHP_GO)
+                                  +I_EX_GO);
+      auto du2 = DT * INV_C_GO * (-GBAR_LEAK_GO                        * (l_u + du1 - E_LEAK_GO)
+                                  -GBAR_EX_GO   * KAPPA_GOGR * l_g_ex  * (l_u + du1 - E_EX_GO)
+                                  -GBAR_AHP_GO               * l_g_ahp * (l_u + du1 - E_AHP_GO)
+                                  +I_EX_GO);
+      l_u += 0.5f * (du1 + du2);
+      spk = l_u > TH_GO;
+      u[target_neuron_id]           = E_LEAK_GO * spk + l_u * (!spk);
+      g_ex[target_neuron_id]        = l_g_ex;
+      g_ahp[target_neuron_id]       = l_g_ahp;
+      s_go[target_neuron_id - N_GR] = spk;
+    }
+    flush_L1();
+  }
+}
+
 static void store_spikes(const int pid, const int tid, const int index, const int t_i, char* spkp_buf,
-                         const unsigned long* s_gr) {
-  if (index < N_GR_P) spkp_buf[t_i * N_ALL_P + index] = (char)(s_gr[pid] & (1UL << tid));
+                         const unsigned long* s_gr, const unsigned char* s_go) {
+       if (index < T_GR_P) spkp_buf[t_i * N_ALL_P + index] = (char)(s_gr[pid] & (1UL << tid));
+  else if (index < T_GO_P) spkp_buf[t_i * N_ALL_P + index] = s_go[index - N_GR_P];
   flush_L1();
 }
 
-void pzc_kernel (unsigned int* seeds, unsigned  long* s_gr,
-                 float* u, float* g_ex, float* g_ahp,
-                 char* spikep_buf, const int t_e) {
+void pzc_kernel(unsigned int* seeds, unsigned short* lists,
+                unsigned long* s_gr, unsigned char* s_go,
+                float* u, float* g_ex, float* g_ahp,
+                char* spikep_buf, const int t_e) {
   auto tid = get_tid();
   auto pid = get_pid();
   auto index = tid + MAX_TID * pid;
@@ -81,9 +148,11 @@ void pzc_kernel (unsigned int* seeds, unsigned  long* s_gr,
 
   for (auto t_i = 0; t_i < T_I; t_i++) {
     update_gr(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_ahp, s_gr, working_buf);
-    flush_L2();
-    store_spikes(pid, tid, index, t_i, spikep_buf, s_gr);
-    flush_L2();
+    flush();
+    update_go(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_ahp,  s_go, lists, s_gr, (float*)working_buf);
+    flush();
+    store_spikes(pid, tid, index, t_i, spikep_buf, s_gr, s_go);
+    flush();
   }
 
   flush();
