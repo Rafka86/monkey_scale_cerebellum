@@ -9,6 +9,8 @@
 
 #define MAX_DEVICE_IDS (8)
 
+//#define DEBUG
+
 #include "param.h"
 #define MAX_BINARY_SIZE (0x1000000)
 #define KERNEL_FILE "./kernel.sc2/kernel.sc2.pz"
@@ -239,12 +241,20 @@ int main (int argc, char *argv[]) {
   if (err) Error("pzclEnqueueWriteBuffer:%d u\n", err);
 
   float* g_ex = (float*)malloc(sizeof(float) * N_ALL);
-  if (g_ex == NULL) Error("failed malloc g_ahp\n");
+  if (g_ex == NULL) Error("failed malloc g_ex\n");
   for (int i = 0; i < N_ALL; i++) g_ex[i] = 0.0f;
   pzcl_mem dev_g_ex = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(float) * N_ALL, NULL, &err);
   if (err) Error("pzclCreateBuffer:%d dev_g_ex\n", err);
   err = pzclEnqueueWriteBuffer(queue, dev_g_ex, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_ex, 0, NULL, NULL);
   if (err) Error("pzclEnqueueWriteBuffer:%d g_ex\n", err);
+
+  float* g_inh = (float*)malloc(sizeof(float) * N_ALL);
+  if (g_inh == NULL) Error("failed malloc g_inh\n");
+  for (int i = 0; i < N_ALL; i++) g_inh[i] = 0.0f;
+  pzcl_mem dev_g_inh = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(float) * N_ALL, NULL, &err);
+  if (err) Error("pzclCreateBuffer:%d dev_g_inh\n", err);
+  err = pzclEnqueueWriteBuffer(queue, dev_g_inh, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_inh, 0, NULL, NULL);
+  if (err) Error("pzclEnqueueWriteBuffer:%d g_inh\n", err);
 
   float* g_ahp = (float*)malloc(sizeof(float) * N_ALL);
   if (g_ahp == NULL) Error("failed malloc g_ahp\n");
@@ -285,8 +295,9 @@ int main (int argc, char *argv[]) {
     pzclSetKernelArg(kernel, 3, sizeof(pzcl_mem), &dev_s_go);
     pzclSetKernelArg(kernel, 4, sizeof(pzcl_mem), &dev_u);
     pzclSetKernelArg(kernel, 5, sizeof(pzcl_mem), &dev_g_ex);
-    pzclSetKernelArg(kernel, 6, sizeof(pzcl_mem), &dev_g_ahp);
-    pzclSetKernelArg(kernel, 7, sizeof(pzcl_mem), &dev_spikep_buf);
+    pzclSetKernelArg(kernel, 6, sizeof(pzcl_mem), &dev_g_inh);
+    pzclSetKernelArg(kernel, 7, sizeof(pzcl_mem), &dev_g_ahp);
+    pzclSetKernelArg(kernel, 8, sizeof(pzcl_mem), &dev_spikep_buf);
 
     if (world_rank == 0) timer_start();
 
@@ -294,7 +305,7 @@ int main (int argc, char *argv[]) {
     for (int t_e = 0; t_e < N_PERIOD; t_e += T_I) {
       count++;
 
-      pzclSetKernelArg(kernel, 8, sizeof(int), &t_e);
+      pzclSetKernelArg(kernel, 9, sizeof(int), &t_e);
 
       err = pzclEnqueueNDRangeKernel(queue, kernel, 1, NULL, &work_unit_size, NULL, 0, NULL, &event);
       if (err) Error("pzclEnqueueNDRangeKernel: %d\n", err);
@@ -307,12 +318,16 @@ int main (int argc, char *argv[]) {
       if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
       if (spikep_buf == NULL) Error("Enpty spikep_buf.\n");
 #ifdef DEBUG
+      fprintf(log, "t:%d\t", t_e + T_I);
       err = pzclEnqueueReadBuffer(queue, dev_u, PZCL_TRUE, 0, sizeof(float) * N_ALL, u, 0, NULL, NULL);
       if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      fprintf(log, "v:%f\n", u[N_GR]);
+      fprintf(log, "v:%f\t", u[0]);
       err = pzclEnqueueReadBuffer(queue, dev_g_ex, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_ex, 0, NULL, NULL);
       if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      fprintf(log, "g_ex:%f\n", g_ex[N_GR]);
+      fprintf(log, "g_ex:%f\t", g_ex[0]);
+      err = pzclEnqueueReadBuffer(queue, dev_g_inh, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_inh, 0, NULL, NULL);
+      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
+      fprintf(log, "g_inh:%f\n", g_inh[0]);
 #endif
 
       for (int t_i = 0; t_i < T_I; t_i++) {

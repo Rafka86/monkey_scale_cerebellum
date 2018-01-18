@@ -28,18 +28,44 @@ static inline float genrand(unsigned int* seed) {
 }
 
 static void update_gr(const int pid, const int tid, const int index, const int t_e, const int t_i,
-                      unsigned int* seeds, float* u, float* g_ex, float* g_ahp,
-                      unsigned long* s_gr, unsigned char* wbuf) {
+                      unsigned int* seeds, float* u, float* g_ex, float* g_inh, float* g_ahp, unsigned long* s_gr,
+                      const unsigned short* list_grgo, const unsigned char* s_go,
+                      unsigned char* wbuf) {
   auto wbuf_i = 7 - tid;
+  auto count = 0;
+  auto inh_input = (float*)wbuf + 8;
   auto mf_firing_rate = 0.03f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD));
   for (auto i = pid; i < N_S_GR; i += MAX_PID) {
+    //calc input from go
+    {
+      auto gr_group_id = i >> 4;
+      auto wbuf_float = (float*)wbuf;
+      auto seed = seeds[index];
+
+      auto idx = list_grgo[gr_group_id * N_GO + tid];
+      auto rnd = genrand(&seed);
+      wbuf_float[tid] = (1.0f              * (rnd < 0.25f)
+                        +DECAY_GABA1_GRGO  * (0.25f <= rnd && rnd < 0.5f)
+                        +DECAY_GABA1_GRGO2 * (0.5f <= rnd && rnd < 0.75f)
+                        +DECAY_GABA1_GRGO3 * (0.75f <= rnd)) * R_GABA1_GRGO * s_go[idx];
+
+      sync_L1();
+      if (tid == 0) {
+        *inh_input = wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7];
+        *inh_input *= GAMMA;
+      } 
+    }
+
+    sync_L1();
     auto spk_block = s_gr[i];
     wbuf[wbuf_i] = 0;
+
     for (auto j = 0; j < 8; j++) {
       auto spk = get_spike(spk_block, tid * 8 + j);
       auto target_neuron_id = i * 64 + tid * 8 + j;
       auto l_u     = u[target_neuron_id];
       auto l_g_ex  = g_ex[target_neuron_id];
+      auto l_g_inh = g_inh[target_neuron_id];
       auto l_g_ahp = g_ahp[target_neuron_id];
       auto seed    = seeds[target_neuron_id];
 
@@ -50,27 +76,37 @@ static void update_gr(const int pid, const int tid, const int index, const int t
       for (auto k = 0; k < N_MF_PER_GR; k++)
         sum += genrand(&seed) < (mf_firing_rate * (k == 0) + 0.005 * (k != 0));
       l_g_ex += LAMBDA * R_AMPA_GRMF * (float)sum;
+      l_g_inh *= DECAY_GABA1_GRGO;
+      l_g_inh += *inh_input;
 
       // update v
       auto du1 = DT * INV_C_GR * (-GBAR_LEAK_GR           * (l_u - E_LEAK_GR)
                                   -GBAR_EX_GR   * l_g_ex  * (l_u - E_EX_GR)
+                                  -GBAR_INH_GR  * l_g_inh * (l_u - E_INH_GR)
                                   -GBAR_AHP_GR  * l_g_ahp * (l_u - E_AHP_GR)
                                   +I_EX_GR);
       auto du2 = DT * INV_C_GR * (-GBAR_LEAK_GR           * (l_u + du1 - E_LEAK_GR)
                                   -GBAR_EX_GR   * l_g_ex  * (l_u + du1 - E_EX_GR)
+                                  -GBAR_INH_GR  * l_g_inh * (l_u + du1 - E_INH_GR)
                                   -GBAR_AHP_GR  * l_g_ahp * (l_u + du1 - E_AHP_GR)
                                   +I_EX_GR);
       l_u += 0.5f * (du1 + du2);
       spk = l_u > TH_GR;
       u[target_neuron_id]     = E_LEAK_GR * spk + l_u * (!spk);
       g_ex[target_neuron_id]  = l_g_ex;
+      g_inh[target_neuron_id] = l_g_inh;
       g_ahp[target_neuron_id] = l_g_ahp;
       seeds[target_neuron_id] = seed;
       wbuf[wbuf_i] |= (spk << j);
     }
     sync_L1();
     if (tid == 0) s_gr[i] = *((unsigned long*)wbuf);
-    flush_L1();
+    if (++count == 4) {
+      flush_L2();
+      count = 0;
+    } else {
+      flush_L1();
+    }
   }
 }
 
@@ -138,7 +174,7 @@ static void store_spikes(const int pid, const int tid, const int index, const in
 
 void pzc_kernel(unsigned int* seeds, unsigned short* lists,
                 unsigned long* s_gr, unsigned char* s_go,
-                float* u, float* g_ex, float* g_ahp,
+                float* u, float* g_ex, float* g_inh, float* g_ahp,
                 char* spikep_buf, const int t_e) {
   auto tid = get_tid();
   auto pid = get_pid();
@@ -147,7 +183,7 @@ void pzc_kernel(unsigned int* seeds, unsigned short* lists,
   unsigned char* working_buf = (unsigned char*)(0x4000);
 
   for (auto t_i = 0; t_i < T_I; t_i++) {
-    update_gr(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_ahp, s_gr, working_buf);
+    update_gr(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_inh, g_ahp, s_gr, lists + N_GO * N_GO, s_go, working_buf);
     flush();
     update_go(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_ahp,  s_go, lists, s_gr, (float*)working_buf);
     flush();

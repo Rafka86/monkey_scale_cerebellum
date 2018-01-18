@@ -21,15 +21,22 @@
 #define DECAY_AHP_GR (0.81873f)
 #define I_EX_GR      (0.0f)
 
-#define N_MF_PER_GR     (4)
-#define GBAR_EX_GR      (0.18f)
-#define E_EX_GR         (0.0f)
-#define DECAY_AMPA_GRMF (0.43460f) //exp(-(float)DT/tau_ampa_grmf);
-#define DECAY_NMDA_GRMF (0.98095f) //exp(-(float)DT/tau_nmda_grmf);
-#define R_AMPA_GRMF     (0.88f)
-#define R_NMDA_GRMF     (0.12f)
-#define LAMBDA          (16.0f)
-#define N_GO_PER_GR     (8)
+#define N_MF_PER_GR       (4)
+#define GBAR_EX_GR        (0.18f)
+#define E_EX_GR           (0.0f)
+#define DECAY_AMPA_GRMF   (0.43460f) //exp(-(float)DT/tau_ampa_grmf);
+#define DECAY_NMDA_GRMF   (0.98095f) //exp(-(float)DT/tau_nmda_grmf);
+#define R_AMPA_GRMF       (0.88f)
+#define R_NMDA_GRMF       (0.12f)
+#define LAMBDA            (16.0f)
+#define N_GO_PER_GR       (8)
+#define GBAR_INH_GR       (0.028f)
+#define E_INH_GR          (-82.0f)
+#define DECAY_GABA1_GRGO  (0.86688f)
+#define DECAY_GABA1_GRGO2 (0.75148f)
+#define DECAY_GABA1_GRGO3 (0.65144f)
+#define R_GABA1_GRGO      (0.43f)
+#define GAMMA             (8.0f)
 
 #define TH_GO        (-52.0f)
 #define C_GO         (28.0f)
@@ -55,7 +62,7 @@
 #define R_AMPA_GOGR      (0.8f)
 #define R_NMDA1_GOGR     (0.066f)   //(0.2*0.33)
 #define R_NMDA2_GOGR     (0.134f)   //(0.2*0.67)
-#define KAPPA_GOGR       (4.0e-5f)
+#define KAPPA_GOGR       (2.0e-5f)
 
 #define IDX_H_GR (0)
 #define IDX_T_GR ((IDX_H_GR) + (N_GR))
@@ -74,7 +81,7 @@
 #define WORK_UNIT_SIZE (16384)//(15872) //1984PE * 8Thread
 #define N_MAX_THREADS (WORK_UNIT_SIZE)
 
-#define N_GR_P (128)
+#define N_GR_P (1024)
 #define N_GO_P (N_GO)
 #define N_ALL_P ((N_GR_P) + (N_GO_P))
 
