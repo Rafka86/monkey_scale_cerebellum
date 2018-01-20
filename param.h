@@ -1,11 +1,16 @@
 #define R_N2 (32 * 32)
 
-#define N_GR (32 * 32 * R_N2)
-#define X_GO (32)
-#define Y_GO (32)
-#define N_GO (1024) // X_GO * Y_GO
+#define N_GR  (32 * 32 * R_N2)
+#define X_GO  (32)
+#define Y_GO  (32)
+#define N_GO  (1024) // X_GO * Y_GO
+#define N_PKJ (32)
+#define N_ST  (32)
+#define N_VN  (1)
+#define N_IO  (1)
 
-#define N_ALL ((N_GR) + (N_GO))
+#define N_ALL ((N_GR) + (N_GO) + (N_PKJ) + (N_ST) + (N_VN) + (N_IO))
+#define N_MOL ((N_PKJ) + (N_ST) + (N_VN) + (N_IO))
 
 #define N_S_GR (N_GR / 64)
 
@@ -64,13 +69,69 @@
 #define R_NMDA2_GOGR     (0.134f)   //(0.2*0.67)
 #define KAPPA_GOGR       (2.0e-5f)
 
-#define IDX_H_GR (0)
-#define IDX_T_GR ((IDX_H_GR) + (N_GR))
-#define IDX_H_GO (IDX_T_GR)
-#define IDX_T_GO ((IDX_H_GO) + (N_GO))
+#define TH_PKJ        (-55.0f)     // mV
+#define C_PKJ         (106.0f)     // pF
+#define INV_C_PKJ     (0.0094339f)
+#define R_PKJ         (0.431f)     // GOhm
+#define GBAR_LEAK_PKJ (4.37f)      // 4.37 nS
+#define E_LEAK_PKJ    (-68.0f)     // mV
+#define GBAR_AHP_PKJ  (100.0f)     // nS
+#define E_AHP_PKJ     (-70.0f)     //E_LEAK_PKJ
+#define DECAY_AHP_PKJ (0.670320f)  //exp(-(double)DT/tau_ahp_pkj);
+#define I_EX_PKJ      (250.0f)
 
-#define GR(i) (((IDX_H_GR) <= (i)) && ((i) < (IDX_T_GR)))
-#define GO(i) (((IDX_H_GO) <= (i)) && ((i) < (IDX_T_GO)))
+#define TH_ST        (-55.0f)     // mV
+#define C_ST         (106.0f)     // pF
+#define INV_C_ST     (0.0094339f)
+#define R_ST         (0.431f)     // GOhm
+#define GBAR_LEAK_ST (4.37f)      // 4.37 nS
+#define E_LEAK_ST    (-68.0f)     // mV
+#define GBAR_AHP_ST  (100.0f)     // nS
+#define E_AHP_ST     (-70.0f)     //E_LEAK_PKJ
+#define DECAY_AHP_ST (0.670320f)  //exp(-(double)DT/tau_ahp_st);
+#define I_EX_ST      (10.0f)
+
+#define TH_VN        (-38.8f)     // mV
+#define C_VN         (122.3f)     // microF
+#define INV_C_VN     (0.0081766f)
+#define R_VN         (0.61f)      // kOhm
+#define GBAR_LEAK_VN (1.64f)      //(1.0/(R_VN))
+#define E_LEAK_VN    (-56.0f)     // mV
+#define GBAR_AHP_VN  (50.0f)      //0.5
+#define E_AHP_VN     (-70.0f)     // mV
+#define DECAY_AHP_VN (0.81873f)   //exp(-DT/tau_ahp_cn);
+#define I_EX_VN      (10.0f)
+
+#define TH_IO        (-50.0f)
+#define C_IO         (1.0f)
+#define INV_C_IO     (1.0f)
+#define GBAR_LEAK_IO (0.015f)
+#define E_LEAK_IO    (-60.0f)
+#define GBAR_AHP_IO  (1.0f)
+#define E_AHP_IO     (-70.0f)
+#define DECAY_AHP_IO (0.81873f) //exp(-DT/tau_ahp_io);
+#define I_EX_IO      (10.0f)
+
+#define IDX_H_GR  (0)
+#define IDX_T_GR  ((IDX_H_GR) + (N_GR))
+#define IDX_H_GO  (IDX_T_GR)
+#define IDX_T_GO  ((IDX_H_GO) + (N_GO))
+#define IDX_H_PKJ (IDX_T_GO)
+#define IDX_T_PKJ ((IDX_H_PKJ) + (N_PKJ))
+#define IDX_H_ST  (IDX_T_PKJ)
+#define IDX_T_ST  ((IDX_H_ST) + (N_ST))
+#define IDX_H_VN  (IDX_T_ST)
+#define IDX_T_VN  ((IDX_H_VN) + (N_VN))
+#define IDX_H_IO  (IDX_T_VN)
+#define IDX_T_IO  ((IDX_H_IO) + (N_IO))
+#define IDX_H_MOL (IDX_H_PKJ)
+
+#define GR(i)  (((IDX_H_GR)  <= (i)) && ((i) < (IDX_T_GR) ))
+#define GO(i)  (((IDX_H_GO)  <= (i)) && ((i) < (IDX_T_GO) ))
+#define PKJ(i) (((IDX_H_PKJ) <= (i)) && ((i) < (IDX_T_PKJ)))
+#define ST(i)  (((IDX_H_ST)  <= (i)) && ((i) < (IDX_T_ST) ))
+#define VN(i)  (((IDX_H_VN)  <= (i)) && ((i) < (IDX_T_VN) ))
+#define IO(i)  (((IDX_H_IO)  <= (i)) && ((i) < (IDX_T_IO) ))
 
 #define N_TRIALS (1)
 #define N_PERIOD (6000) // 6000 msec
@@ -81,9 +142,17 @@
 #define WORK_UNIT_SIZE (16384)//(15872) //1984PE * 8Thread
 #define N_MAX_THREADS (WORK_UNIT_SIZE)
 
-#define N_GR_P (1024)
-#define N_GO_P (N_GO)
-#define N_ALL_P ((N_GR_P) + (N_GO_P))
+#define N_GR_P  (1024)
+#define N_GO_P  (N_GO)
+#define N_PKJ_P (N_PKJ)
+#define N_ST_P  (N_ST)
+#define N_VN_P  (N_VN)
+#define N_IO_P  (N_IO)
+#define N_ALL_P ((N_GR_P) + (N_GO_P) + (N_PKJ_P) + (N_ST_P) + (N_VN_P) + (N_IO_P))
 
-#define T_GR_P (N_GR_P)
-#define T_GO_P ((T_GR_P) + (N_GO_P))
+#define T_GR_P  (N_GR_P)
+#define T_GO_P  ((T_GR_P)  + (N_GO_P) )
+#define T_PKJ_P ((T_GO_P)  + (N_PKJ_P))
+#define T_ST_P  ((T_PKJ_P) + (N_ST_P) )
+#define T_VN_P  ((T_ST_P)  + (N_VN_P) )
+#define T_IO_P  ((T_VN_P)  + (N_IO_P) )

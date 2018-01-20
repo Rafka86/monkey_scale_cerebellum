@@ -209,6 +209,14 @@ int main (int argc, char *argv[]) {
   err = pzclEnqueueWriteBuffer(queue, dev_s_go, PZCL_TRUE, 0, sizeof(unsigned char) * N_GO, s_go, 0, NULL, NULL);
   if (err) Error("pzclEnqueueWriteBuffer:%d s_go\n", err);
 
+  unsigned char* s_mol = (unsigned char*)malloc(sizeof(unsigned char) * N_MOL);
+  if (s_mol == NULL) Error("failed malloc s_mol\n");
+  for (int i = 0; i < N_MOL; i++) s_mol[i] = 0;
+  pzcl_mem dev_s_mol = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(unsigned char) * N_MOL, NULL, &err);
+  if (err) Error("pzclCreateBuffer:%d dev_s_mol\n", err);
+  err = pzclEnqueueWriteBuffer(queue, dev_s_mol, PZCL_TRUE, 0, sizeof(unsigned char) * N_MOL, s_mol, 0, NULL, NULL);
+  if (err) Error("pzclEnqueueWriteBuffer:%d s_mol\n", err);
+
   srand(23L);
   unsigned int* seeds = (unsigned int*)malloc(sizeof(unsigned int) * N_GR);
   if (seeds == NULL) Error("failed malloc seeds\n");
@@ -231,8 +239,12 @@ int main (int argc, char *argv[]) {
   float* u = (float*)malloc(sizeof(float) * N_ALL);
   if (u == NULL) Error("failed malloc u\n");
   for (int i = 0; i < N_ALL; i++) {
-    float e_leak = ( GR(i) * (E_LEAK_GR) 
-                    +GO(i) * (E_LEAK_GO));
+    float e_leak = (  GR(i) * (E_LEAK_GR) 
+                    + GO(i) * (E_LEAK_GO)
+                    +PKJ(i) * (E_LEAK_PKJ)
+                    + ST(i) * (E_LEAK_ST)
+                    + VN(i) * (E_LEAK_VN)
+                    + IO(i) * (E_LEAK_IO));
     u[i] = e_leak;
   }
   pzcl_mem dev_u = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(float) * N_ALL, NULL, &err);
@@ -272,6 +284,14 @@ int main (int argc, char *argv[]) {
   err = pzclEnqueueWriteBuffer(queue, dev_spikep_buf, PZCL_TRUE, 0, sizeof(char) * N_ALL_P * T_I, spikep_buf, 0, NULL, NULL);
   if (err) Error("pzclEnqueueWriteBuffer:%d spikep_buf\n", err);
 
+  float* debug = (float*)malloc(sizeof(float) * 2 * T_I);
+  if (debug == NULL) Error("failed malloc debug\n");
+  for (int i = 0; i < 2 * T_I; i++) debug[i] = 0;
+  pzcl_mem dev_debug = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(float) * 2 * T_I, NULL, &err);
+  if (err) Error("pzclCreateBuffer:%d dev_debug\n", err);
+  err = pzclEnqueueWriteBuffer(queue, dev_debug, PZCL_TRUE, 0, sizeof(float) * 2 * T_I, debug, 0, NULL, NULL);
+  if (err) Error("pzclEnqueueWriteBuffer:%d debug\n", err);
+
   char* h_spikep_buf = (char*)malloc(sizeof(char) * N_ALL_P * N_PERIOD);
 
   size_t work_unit_size = WORK_UNIT_SIZE;
@@ -293,11 +313,13 @@ int main (int argc, char *argv[]) {
     pzclSetKernelArg(kernel, 1, sizeof(pzcl_mem), &dev_lists);
     pzclSetKernelArg(kernel, 2, sizeof(pzcl_mem), &dev_s_gr);
     pzclSetKernelArg(kernel, 3, sizeof(pzcl_mem), &dev_s_go);
-    pzclSetKernelArg(kernel, 4, sizeof(pzcl_mem), &dev_u);
-    pzclSetKernelArg(kernel, 5, sizeof(pzcl_mem), &dev_g_ex);
-    pzclSetKernelArg(kernel, 6, sizeof(pzcl_mem), &dev_g_inh);
-    pzclSetKernelArg(kernel, 7, sizeof(pzcl_mem), &dev_g_ahp);
-    pzclSetKernelArg(kernel, 8, sizeof(pzcl_mem), &dev_spikep_buf);
+    pzclSetKernelArg(kernel, 4, sizeof(pzcl_mem), &dev_s_mol);
+    pzclSetKernelArg(kernel, 5, sizeof(pzcl_mem), &dev_u);
+    pzclSetKernelArg(kernel, 6, sizeof(pzcl_mem), &dev_g_ex);
+    pzclSetKernelArg(kernel, 7, sizeof(pzcl_mem), &dev_g_inh);
+    pzclSetKernelArg(kernel, 8, sizeof(pzcl_mem), &dev_g_ahp);
+    pzclSetKernelArg(kernel, 9, sizeof(pzcl_mem), &dev_spikep_buf);
+    pzclSetKernelArg(kernel, 10, sizeof(pzcl_mem), &dev_debug);
 
     if (world_rank == 0) timer_start();
 
@@ -305,7 +327,7 @@ int main (int argc, char *argv[]) {
     for (int t_e = 0; t_e < N_PERIOD; t_e += T_I) {
       count++;
 
-      pzclSetKernelArg(kernel, 9, sizeof(int), &t_e);
+      pzclSetKernelArg(kernel, 11, sizeof(int), &t_e);
 
       err = pzclEnqueueNDRangeKernel(queue, kernel, 1, NULL, &work_unit_size, NULL, 0, NULL, &event);
       if (err) Error("pzclEnqueueNDRangeKernel: %d\n", err);
@@ -321,13 +343,25 @@ int main (int argc, char *argv[]) {
       fprintf(log, "t:%d\t", t_e + T_I);
       err = pzclEnqueueReadBuffer(queue, dev_u, PZCL_TRUE, 0, sizeof(float) * N_ALL, u, 0, NULL, NULL);
       if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      fprintf(log, "v:%f\t", u[0]);
-      err = pzclEnqueueReadBuffer(queue, dev_g_ex, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_ex, 0, NULL, NULL);
+      err = pzclEnqueueReadBuffer(queue, dev_s_mol, PZCL_TRUE, 0, sizeof(unsigned char) * N_MOL, s_mol, 0, NULL, NULL);
       if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      fprintf(log, "g_ex:%f\t", g_ex[0]);
-      err = pzclEnqueueReadBuffer(queue, dev_g_inh, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_inh, 0, NULL, NULL);
+      fprintf(log, "v:%f\tspk:%d %d %d %d\t", u[IDX_H_PKJ],
+              spikep_buf[T_GO_P], spikep_buf[N_ALL_P + T_GO_P], spikep_buf[N_ALL_P * 2 + T_GO_P], spikep_buf[N_ALL_P * 3 + T_GO_P]);
+      fprintf(log, "s_mol:%d\t", s_mol[0]);
+      //err = pzclEnqueueReadBuffer(queue, dev_g_ex, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_ex, 0, NULL, NULL);
+      //if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
+      //fprintf(log, "g_ex:%f\t", g_ex[0]);
+      //err = pzclEnqueueReadBuffer(queue, dev_g_inh, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_inh, 0, NULL, NULL);
+      //if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
+      //fprintf(log, "g_inh:%f\n", g_inh[0]);
+      err = pzclEnqueueReadBuffer(queue, dev_g_ahp, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_ahp, 0, NULL, NULL);
       if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      fprintf(log, "g_inh:%f\n", g_inh[0]);
+      fprintf(log, "g_ahp:%f\t", g_ahp[IDX_H_PKJ]);
+      err = pzclEnqueueReadBuffer(queue, dev_debug, PZCL_TRUE, 0, sizeof(float) * 2 * T_I, debug, 0, NULL, NULL);
+      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
+      fprintf(log, "debug:");
+      for (int i = 0; i < 2 * T_I; i++) fprintf(log, "%f ", debug[i]);
+      fprintf(log, "\n");
 #endif
 
       for (int t_i = 0; t_i < T_I; t_i++) {

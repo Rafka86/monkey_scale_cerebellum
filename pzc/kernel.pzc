@@ -115,12 +115,12 @@ static void update_go(const int pid, const int tid, const int index, const int t
                       const unsigned short* list_gogr, const unsigned long* s_gr,
                       float* wbuf) {
   auto seed = seeds[index];
-  for (auto i = pid; i < N_GO; i += MAX_PID) {
-    auto target_neuron_id = i + N_GR;
+  if (pid < N_GO) {
+    auto target_neuron_id = pid + IDX_H_GO;
 
     wbuf[tid] = 0.0f;
     for (auto j = tid; j < N_GR_PER_GO; j++) {
-      auto idx = list_gogr[i * N_GO + j];
+      auto idx = list_gogr[pid * N_GO + j];
       auto sp = &s_gr[idx * 16];
       auto spikes_gr = 0;
       for (auto k = 0; k < 16; k++)
@@ -135,7 +135,7 @@ static void update_go(const int pid, const int tid, const int index, const int t
     }
     sync_L1();
     if (tid == 0) {
-      auto spk     = s_go[target_neuron_id - N_GR];
+      auto spk     = s_go[target_neuron_id - IDX_H_GO];
       auto l_u     = u[target_neuron_id];
       auto l_g_ex  = g_ex[target_neuron_id];
       auto l_g_ahp = g_ahp[target_neuron_id];
@@ -156,38 +156,113 @@ static void update_go(const int pid, const int tid, const int index, const int t
                                   +I_EX_GO);
       l_u += 0.5f * (du1 + du2);
       spk = l_u > TH_GO;
-      u[target_neuron_id]           = E_LEAK_GO * spk + l_u * (!spk);
-      g_ex[target_neuron_id]        = l_g_ex;
-      g_ahp[target_neuron_id]       = l_g_ahp;
-      s_go[target_neuron_id - N_GR] = spk;
+      u[target_neuron_id]               = E_LEAK_GO * spk + l_u * (!spk);
+      g_ex[target_neuron_id]            = l_g_ex;
+      g_ahp[target_neuron_id]           = l_g_ahp;
+      s_go[target_neuron_id - IDX_H_GO] = spk;
     }
-    flush_L1();
   }
+  flush_L1();
+}
+
+static void update_mol(const int pid, const int tid, const int index, const int t_i,
+                       float* u, float* g_ahp, unsigned char* s_mol) {
+  if (pid < N_MOL) {
+    auto target_neuron_id = pid + IDX_H_MOL; 
+
+    if (tid == 0) {
+      auto spk     = s_mol[target_neuron_id - IDX_H_MOL];
+      auto l_u     = u[target_neuron_id];
+      auto l_g_ahp = g_ahp[target_neuron_id];
+
+      // Load const params
+      auto inv_c = (PKJ(target_neuron_id) * (INV_C_PKJ)
+                   + ST(target_neuron_id) * (INV_C_ST)
+                   + VN(target_neuron_id) * (INV_C_VN)
+                   + IO(target_neuron_id) * (INV_C_IO));
+      auto gbar_leak = (PKJ(target_neuron_id) * (GBAR_LEAK_PKJ)
+                       + ST(target_neuron_id) * (GBAR_LEAK_ST)
+                       + VN(target_neuron_id) * (GBAR_LEAK_VN)
+                       + IO(target_neuron_id) * (GBAR_LEAK_IO));
+      auto e_leak = (PKJ(target_neuron_id) * (E_LEAK_PKJ)
+                    + ST(target_neuron_id) * (E_LEAK_ST)
+                    + VN(target_neuron_id) * (E_LEAK_VN)
+                    + IO(target_neuron_id) * (E_LEAK_IO));
+      auto i_ex = (PKJ(target_neuron_id) * (I_EX_PKJ)
+                  + ST(target_neuron_id) * (I_EX_ST)
+                  + VN(target_neuron_id) * (I_EX_VN)
+                  + IO(target_neuron_id) * (I_EX_IO));
+      auto th = (PKJ(target_neuron_id) * (TH_PKJ)
+                + ST(target_neuron_id) * (TH_ST)
+                + VN(target_neuron_id) * (TH_VN)
+                + IO(target_neuron_id) * (TH_IO));
+      auto gbar_ahp = (PKJ(target_neuron_id) * (GBAR_AHP_PKJ)
+                      + ST(target_neuron_id) * (GBAR_AHP_ST)
+                      + VN(target_neuron_id) * (GBAR_AHP_VN)
+                      + IO(target_neuron_id) * (GBAR_AHP_IO));
+      auto e_ahp = (PKJ(target_neuron_id) * (E_AHP_PKJ)
+                   + ST(target_neuron_id) * (E_AHP_ST)
+                   + VN(target_neuron_id) * (E_AHP_VN)
+                   + IO(target_neuron_id) * (E_AHP_IO));
+      auto decay_ahp = (PKJ(target_neuron_id) * (DECAY_AHP_PKJ)
+                       + ST(target_neuron_id) * (DECAY_AHP_ST)
+                       + VN(target_neuron_id) * (DECAY_AHP_VN)
+                       + IO(target_neuron_id) * (DECAY_AHP_IO));
+      auto e_reset = (PKJ(target_neuron_id) * (E_LEAK_PKJ)
+                     + ST(target_neuron_id) * (E_LEAK_ST)
+                     + VN(target_neuron_id) * (E_LEAK_VN)
+                     + IO(target_neuron_id) * (E_LEAK_IO));
+
+      // update conductances
+      l_g_ahp = l_g_ahp * decay_ahp * (!spk) + spk;
+
+      // update v
+      auto du1 = DT * inv_c * (-gbar_leak           * (l_u - e_leak)
+                               -gbar_ahp  * l_g_ahp * (l_u - e_ahp)
+                               +i_ex);
+      auto du2 = DT * inv_c * (-gbar_leak           * (l_u + du1 - e_leak)
+                               -gbar_ahp  * l_g_ahp * (l_u + du1 - e_ahp)
+                               +i_ex);
+
+      l_u += 0.5f * (du1 + du2);
+      spk = l_u > th;
+      u[target_neuron_id]                 = e_leak * spk + l_u * (!spk);
+      g_ahp[target_neuron_id]             = l_g_ahp;
+      s_mol[target_neuron_id - IDX_H_MOL] = spk;
+    }
+  }
+  flush_L1();
 }
 
 static void store_spikes(const int pid, const int tid, const int index, const int t_i, char* spkp_buf,
-                         const unsigned long* s_gr, const unsigned char* s_go) {
-       if (index < T_GR_P) spkp_buf[t_i * N_ALL_P + index] = (char)(s_gr[pid] & (1UL << tid));
-  else if (index < T_GO_P) spkp_buf[t_i * N_ALL_P + index] = s_go[index - N_GR_P];
+                         const unsigned long* s_gr, const unsigned char* s_go, const unsigned char* s_mol) {
+       if (index < T_GR_P)  spkp_buf[t_i * N_ALL_P + index] = (char)(s_gr[pid] & (1UL << tid));
+  else if (index < T_GO_P)  spkp_buf[t_i * N_ALL_P + index] =  s_go[index - N_GR_P];
+  else if (index < T_PKJ_P) spkp_buf[t_i * N_ALL_P + index] = s_mol[index - N_GR_P - N_GO_P];
+  else if (index < T_ST_P)  spkp_buf[t_i * N_ALL_P + index] = s_mol[index - N_GR_P - N_GO_P - N_PKJ_P];
+  else if (index < T_VN_P)  spkp_buf[t_i * N_ALL_P + index] = s_mol[index - N_GR_P - N_GO_P - N_PKJ_P - N_ST_P];
+  else if (index < T_IO_P)  spkp_buf[t_i * N_ALL_P + index] = s_mol[index - N_GR_P - N_GO_P - N_PKJ_P - N_ST_P - N_VN_P];
   flush_L1();
 }
 
 void pzc_kernel(unsigned int* seeds, unsigned short* lists,
-                unsigned long* s_gr, unsigned char* s_go,
+                unsigned long* s_gr, unsigned char* s_go, unsigned char* s_mol,
                 float* u, float* g_ex, float* g_inh, float* g_ahp,
-                char* spikep_buf, const int t_e) {
+                char* spikep_buf, float* debug, const int t_e) {
   auto tid = get_tid();
   auto pid = get_pid();
-  auto index = tid + MAX_TID * pid;
+  auto index = pid * MAX_TID + tid;
 
   unsigned char* working_buf = (unsigned char*)(0x4000);
 
   for (auto t_i = 0; t_i < T_I; t_i++) {
     update_gr(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_inh, g_ahp, s_gr, lists + N_GO * N_GO, s_go, working_buf);
     flush();
-    update_go(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_ahp,  s_go, lists, s_gr, (float*)working_buf);
+    update_go(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_ahp, s_go, lists, s_gr, (float*)working_buf);
     flush();
-    store_spikes(pid, tid, index, t_i, spikep_buf, s_gr, s_go);
+    update_mol(pid, tid, index, t_i, u, g_ahp, s_mol);
+    flush();
+    store_spikes(pid, tid, index, t_i, spikep_buf, s_gr, s_go, s_mol);
     flush();
   }
 
