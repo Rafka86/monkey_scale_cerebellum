@@ -12,7 +12,8 @@
 #define N_ALL ((N_GR) + (N_GO) + (N_PKJ) + (N_ST) + (N_VN) + (N_IO))
 #define N_MOL ((N_PKJ) + (N_ST) + (N_VN) + (N_IO))
 
-#define N_S_GR (N_GR / 64)
+#define N_S_GR (N_GR >> 6)
+#define N_W_GR (N_GR >> 2)
 
 #define TH_GR        (-35.0f)
 #define C_GR         (3.1f)
@@ -75,10 +76,23 @@
 #define R_PKJ         (0.431f)     // GOhm
 #define GBAR_LEAK_PKJ (4.37f)      // 4.37 nS
 #define E_LEAK_PKJ    (-68.0f)     // mV
+#define GBAR_EX_PKJ   (0.7f)       // nS
+#define E_EX_PKJ      (0.0f)       // mV
+#define GBAR_INH_PKJ  (1.0f)
+#define E_INH_PKJ     (-75.0f)
 #define GBAR_AHP_PKJ  (100.0f)     // nS
 #define E_AHP_PKJ     (-70.0f)     //E_LEAK_PKJ
 #define DECAY_AHP_PKJ (0.670320f)  //exp(-(double)DT/tau_ahp_pkj);
 #define I_EX_PKJ      (250.0f)
+
+#define DECAY_AMPA_PKJPF  (0.886493f) //exp(-(double)DT/tau_ampa_pkjpf);
+#define DECAY_AMPA_PKJPF2 (0.785790f)
+#define DECAY_AMPA_PKJPF3 (0.696668f)
+#define KAPPA_PKJPF       (3.0e-4f)   //3.0e-4f //(0.1*0.003)
+#define DECAY_GABA_PKJST  (0.904847f) //exp(-DT/tau_gaba_pkjst);
+#define DECAY_GABA_PKJST2 (0.818748f)
+#define DECAY_GABA_PKJST3 (0.740842f)
+#define GAMMA_PKJST       (0.333f*N_ST)
 
 #define TH_ST        (-55.0f)     // mV
 #define C_ST         (106.0f)     // pF
@@ -86,10 +100,15 @@
 #define R_ST         (0.431f)     // GOhm
 #define GBAR_LEAK_ST (4.37f)      // 4.37 nS
 #define E_LEAK_ST    (-68.0f)     // mV
+#define GBAR_EX_ST   (0.7f)       // nS
+#define E_EX_ST      (0.0f)       // mV
 #define GBAR_AHP_ST  (100.0f)     // nS
 #define E_AHP_ST     (-70.0f)     //E_LEAK_PKJ
 #define DECAY_AHP_ST (0.670320f)  //exp(-(double)DT/tau_ahp_st);
-#define I_EX_ST      (10.0f)
+#define I_EX_ST      (100.0f)
+
+#define DECAY_AMPA_STPF  (0.886493f) //exp(-DT/tau_ampa_stpf);
+#define KAPPA_STPF       (1.5e-4f)
 
 #define TH_VN        (-38.8f)     // mV
 #define C_VN         (122.3f)     // microF
@@ -97,20 +116,35 @@
 #define R_VN         (0.61f)      // kOhm
 #define GBAR_LEAK_VN (1.64f)      //(1.0/(R_VN))
 #define E_LEAK_VN    (-56.0f)     // mV
+#define GBAR_EX_VN   (50.0f)      //0.1
+#define E_EX_VN      (0.0f)       // mV
+#define GBAR_INH_VN  (30.0f)      //0.5//0.05
+#define E_INH_VN     (-88.0f)     // mV
 #define GBAR_AHP_VN  (50.0f)      //0.5
 #define E_AHP_VN     (-70.0f)     // mV
 #define DECAY_AHP_VN (0.81873f)   //exp(-DT/tau_ahp_cn);
-#define I_EX_VN      (10.0f)
+#define I_EX_VN      (1000.0f)
+
+#define DECAY_AMPA_VNMF  (0.43460f) //exp(-(float)DT/tau_ampa_grmf);
+#define DECAY_GABA_VNPKJ (0.904f)   //10.0 (exp (/ -1.0 10.0))
+#define R_AMPA_VNMF      (0.33f)    //0.66f
+#define GAMMA_VNPKJ      (0.275f)   //0.125f //(2.0/(N_PKJ))
 
 #define TH_IO        (-50.0f)
 #define C_IO         (1.0f)
 #define INV_C_IO     (1.0f)
 #define GBAR_LEAK_IO (0.015f)
 #define E_LEAK_IO    (-60.0f)
+#define GBAR_EX_IO   (0.1f) //0.07//70.0
+#define E_EX_IO      (0.0f)
+#define GBAR_INH_IO  (0.018f)
+#define E_INH_IO     (-75.0f)
 #define GBAR_AHP_IO  (1.0f)
 #define E_AHP_IO     (-70.0f)
 #define DECAY_AHP_IO (0.81873f) //exp(-DT/tau_ahp_io);
-#define I_EX_IO      (10.0f)
+#define I_EX_IO      (0.0f)
+
+#define DECAY_AMPA_IO (0.904837f)
 
 #define IDX_H_GR  (0)
 #define IDX_T_GR  ((IDX_H_GR) + (N_GR))

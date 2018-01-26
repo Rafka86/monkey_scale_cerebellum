@@ -1,4 +1,4 @@
-DEFAULT_MAKE=/opt/pzsdk.ver3.0/make
+DEFAULT_MAKE=/opt/pzsdk.ver4.0/make
 
 CXX=mpic++
 

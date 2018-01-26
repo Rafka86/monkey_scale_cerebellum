@@ -29,8 +29,7 @@ static inline float genrand(unsigned int* seed) {
 
 static void update_gr(const int pid, const int tid, const int index, const int t_e, const int t_i,
                       unsigned int* seeds, float* u, float* g_ex, float* g_inh, float* g_ahp, unsigned long* s_gr,
-                      const unsigned short* list_grgo, const unsigned char* s_go,
-                      unsigned char* wbuf) {
+                      const unsigned short* list_grgo, const unsigned char* s_go, unsigned char* wbuf) {
   auto wbuf_i = 7 - tid;
   auto count = 0;
   auto inh_input = (float*)wbuf + 8;
@@ -112,8 +111,7 @@ static void update_gr(const int pid, const int tid, const int index, const int t
 
 static void update_go(const int pid, const int tid, const int index, const int t_e, const int t_i,
                       const unsigned int* seeds, float* u, float* g_ex, float* g_ahp, unsigned char* s_go,
-                      const unsigned short* list_gogr, const unsigned long* s_gr,
-                      float* wbuf) {
+                      const unsigned short* list_gogr, const unsigned long* s_gr, float* wbuf) {
   auto seed = seeds[index];
   if (pid < N_GO) {
     auto target_neuron_id = pid + IDX_H_GO;
@@ -165,15 +163,121 @@ static void update_go(const int pid, const int tid, const int index, const int t
   flush_L1();
 }
 
-static void update_mol(const int pid, const int tid, const int index, const int t_i,
-                       float* u, float* g_ahp, unsigned char* s_mol) {
+static void calc_input_pkjgr(const int pid, const int tid, const int index,
+                             float* sum, float* g_ex,
+                             const unsigned int* seeds, const unsigned long* s_gr, const unsigned int* w,
+                             float* wbuf) {
+  auto seed = seeds[index];
+  auto local_pid = pid & 255;
+  auto pref_id = pid >> 8;
+  auto count = 0;
+  for (auto i = 0; i < 4; i++) {
+    auto pkj_id = i * 8 + pref_id;
+    auto   x = local_pid >> 5;
+    auto   y = local_pid & 31;
+    auto  ax = x + pkj_id - 4 + (X_GO >> 1);
+    auto idx = (y + (Y_GO >> 1)) + 2 * Y_GO * ax;
+    idx %= N_GO;
+    auto local_sum = 0.0f;
+    auto sp = &s_gr[index];
+    auto w_base = pkj_id * N_W_GR + idx * 256 + tid * 16;  // 256 = R_N2 / 4
+    for (auto k = 0; k < 64; k += 4) {
+      unsigned short z[4];
+      z[0] = get_spike(*sp, k);
+      z[1] = get_spike(*sp, k + 1);
+      z[2] = get_spike(*sp, k + 2);
+      z[3] = get_spike(*sp, k + 3);
+      auto n = w_base + (k >> 2);
+      auto w_all = w[n];
+      auto part_input = (((w_all      ) & 0xff) * z[0]
+                        +((w_all >>  8) & 0xff) * z[1]
+                        +((w_all >> 16) & 0xff) * z[2]
+                        +((w_all >> 24) & 0xff) * z[3]);
+      auto coef = 0.0f;
+      for (auto l = 0; l < z[0] + z[1] + z[2] + z[3]; l++) {
+        auto rnd = genrand(&seed);
+        coef += (             1.0f * (rnd < 0.25f)
+                +DECAY_AMPA_PKJPF  * (0.25f <= rnd && rnd < 0.5f )
+                +DECAY_AMPA_PKJPF2 * (0.5f  <= rnd && rnd < 0.75f)
+                +DECAY_AMPA_PKJPF3 * (0.75f <= rnd));
+      }
+      local_sum += KAPPA_PKJPF * 0.0009766f * part_input * coef;
+    }
+    wbuf[tid] = local_sum;
+    sync_L1();
+    if (tid == 0) sum[pid] = wbuf[0] + wbuf[1] + wbuf[2] + wbuf[3] + wbuf[4] + wbuf[5] + wbuf[6] + wbuf[7];
+    flush_L2();
+    if (local_pid < 16) {
+      auto base = 256 * pref_id + 16 * local_pid;
+      wbuf[tid] = sum[tid + base] + sum[tid + OFFSET + base];
+      sync_L1();
+      if (tid == 0) sum[pid] = wbuf[0] + wbuf[1] + wbuf[2] + wbuf[3] + wbuf[4] + wbuf[5] + wbuf[6] + wbuf[7];
+    }
+    flush_L1();
+    if (local_pid == 0) {
+      auto base = 256 * pref_id;
+      wbuf[tid] = sum[tid + base] + sum[tid + OFFSET + base];
+      sync_L1();
+      if (tid == 0) g_ex[IDX_H_PKJ + pkj_id] = wbuf[0] + wbuf[1] + wbuf[2] + wbuf[3] + wbuf[4] + wbuf[5] + wbuf[6] + wbuf[7];
+    }
+    if (++count != 2) flush_L1();
+    else flush_L2();
+  }
+}
+
+static void calc_input_stgr(const int pid, const int tid, const int index,
+                           float* sum, float* g_ex,
+                           const unsigned int* seeds, const unsigned long* s_gr,
+                           float* wbuf) {
+  auto seed = seeds[index];
+  auto local_pid = pid & 255;
+  auto pref_id = pid >> 8;
+  auto count = 0;
+  for (auto i = 0; i < 4; i++) {
+    auto st_id = i * 8 + pref_id;
+    auto   x = local_pid >> 5;
+    auto   y = local_pid & 31;
+    auto  ax = x + st_id - 4 + (X_GO >> 1);
+    auto idx = (y + (Y_GO >> 1)) + 2 * Y_GO * ax;
+    idx %= N_GO;
+    auto local_sum = 0.0f;
+    auto sp = s_gr[index];
+    local_sum += KAPPA_STPF * popl(sp);
+    wbuf[tid] = local_sum;
+    sync_L1();
+    if (tid == 0) sum[pid] = wbuf[0] + wbuf[1] + wbuf[2] + wbuf[3] + wbuf[4] + wbuf[5] + wbuf[6] + wbuf[7];
+    flush_L2();
+    if (local_pid < 16) {
+      auto base = 256 * pref_id + 16 * local_pid;
+      wbuf[tid] = sum[tid + base] + sum[tid + OFFSET + base];
+      sync_L1();
+      if (tid == 0) sum[pid] = wbuf[0] + wbuf[1] + wbuf[2] + wbuf[3] + wbuf[4] + wbuf[5] + wbuf[6] + wbuf[7];
+    }
+    flush_L1();
+    if (local_pid == 0) {
+      auto base = 256 * pref_id;
+      wbuf[tid] = sum[tid + base] + sum[tid + OFFSET + base];
+      sync_L1();
+      if (tid == 0) g_ex[IDX_H_ST + st_id] = wbuf[0] + wbuf[1] + wbuf[2] + wbuf[3] + wbuf[4] + wbuf[5] + wbuf[6] + wbuf[7];
+    }
+    if (++count != 2) flush_L1();
+    else flush_L2();
+  }
+}
+
+static void update_mol(const int pid, const int tid, const int index, const int t_i, const int t_e,
+                       const unsigned int* seeds, float* u, float* g_ex, float* g_inh, float* g_ahp,
+                       unsigned char* s_mol, float* wbuf) {
   if (pid < N_MOL) {
     auto target_neuron_id = pid + IDX_H_MOL; 
 
     if (tid == 0) {
       auto spk     = s_mol[target_neuron_id - IDX_H_MOL];
       auto l_u     = u[target_neuron_id];
+      auto l_g_ex  = g_ex[target_neuron_id];
+      auto l_g_inh = g_inh[target_neuron_id];
       auto l_g_ahp = g_ahp[target_neuron_id];
+      auto seed = seeds[index];
 
       // Load const params
       auto inv_c = (PKJ(target_neuron_id) * (INV_C_PKJ)
@@ -188,10 +292,30 @@ static void update_mol(const int pid, const int tid, const int index, const int 
                     + ST(target_neuron_id) * (E_LEAK_ST)
                     + VN(target_neuron_id) * (E_LEAK_VN)
                     + IO(target_neuron_id) * (E_LEAK_IO));
-      auto i_ex = (PKJ(target_neuron_id) * (I_EX_PKJ)
-                  + ST(target_neuron_id) * (I_EX_ST)
-                  + VN(target_neuron_id) * (I_EX_VN)
-                  + IO(target_neuron_id) * (I_EX_IO));
+      auto gbar_ex = ( 8.0f * PKJ(target_neuron_id) * (GBAR_EX_PKJ)
+                     +10.0f *  ST(target_neuron_id) * (GBAR_EX_ST)
+                     + 5.0f *  VN(target_neuron_id) * (GBAR_EX_VN)
+                     +         IO(target_neuron_id) * (GBAR_EX_IO));
+      auto e_ex = (PKJ(target_neuron_id) * (E_EX_PKJ)
+                  + ST(target_neuron_id) * (E_EX_ST)
+                  + VN(target_neuron_id) * (E_EX_VN)
+                  + IO(target_neuron_id) * (E_EX_IO));
+      auto decay_ex = (PKJ(target_neuron_id) * (DECAY_AMPA_PKJPF)
+                      + ST(target_neuron_id) * (DECAY_AMPA_STPF)
+                      + VN(target_neuron_id) * (DECAY_AMPA_VNMF)
+                      + IO(target_neuron_id) * (DECAY_AMPA_IO));
+      auto gbar_inh = ( 0.8f * PKJ(target_neuron_id) * (GBAR_INH_PKJ)
+                      +         ST(target_neuron_id) * (0.0f)
+                      +0.05f *  VN(target_neuron_id) * (GBAR_INH_VN)
+                      +         IO(target_neuron_id) * (GBAR_INH_IO));
+      auto e_inh = (PKJ(target_neuron_id) * (E_INH_PKJ)
+                   + ST(target_neuron_id) * (0.0f)
+                   + VN(target_neuron_id) * (E_INH_VN)
+                   + IO(target_neuron_id) * (E_INH_IO));
+      auto decay_inh = (PKJ(target_neuron_id) * (DECAY_GABA_PKJST)
+                       + ST(target_neuron_id) * (0.0f)
+                       + VN(target_neuron_id) * (DECAY_GABA_VNPKJ)
+                       + IO(target_neuron_id) * (0.0f));
       auto th = (PKJ(target_neuron_id) * (TH_PKJ)
                 + ST(target_neuron_id) * (TH_ST)
                 + VN(target_neuron_id) * (TH_VN)
@@ -208,25 +332,55 @@ static void update_mol(const int pid, const int tid, const int index, const int 
                        + ST(target_neuron_id) * (DECAY_AHP_ST)
                        + VN(target_neuron_id) * (DECAY_AHP_VN)
                        + IO(target_neuron_id) * (DECAY_AHP_IO));
-      auto e_reset = (PKJ(target_neuron_id) * (E_LEAK_PKJ)
-                     + ST(target_neuron_id) * (E_LEAK_ST)
-                     + VN(target_neuron_id) * (E_LEAK_VN)
-                     + IO(target_neuron_id) * (E_LEAK_IO));
+      auto i_ex = (PKJ(target_neuron_id) * (I_EX_PKJ)
+                  + ST(target_neuron_id) * (I_EX_ST)
+                  + VN(target_neuron_id) * (I_EX_VN)
+                  + IO(target_neuron_id) * (I_EX_IO));
 
       // update conductances
-      l_g_ahp = l_g_ahp * decay_ahp * (!spk) + spk;
+      if (pid < N_PKJ) {  //update st->pkj
+        auto rnd = genrand(&seed);
+        auto coef = (             1.0f * (rnd < 0.25f)
+                    +DECAY_GABA_PKJST  * (0.25f <= rnd && rnd < 0.5f )
+                    +DECAY_GABA_PKJST2 * (0.5f  <= rnd && rnd < 0.75f)
+                    +DECAY_GABA_PKJST3 * (0.75f <= rnd));
+        l_g_inh += GAMMA_PKJST * s_mol[pid + N_PKJ] * coef;
+      } else if (pid < N_PKJ + N_ST) {
+      } else if (pid < N_PKJ + N_ST + N_VN) {  //update pkj->vn
+        auto s = 0;
+        auto mf_firing_rate = 0.03f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD));
+        auto sum = 0.0f;
+        for (auto i = 0; i < N_PKJ; i++) {
+          sum += R_AMPA_VNMF * (genrand(&seed) < mf_firing_rate) * 0.03125f; //0.03125f = 1/32
+          s += s_mol[i];
+        }
+        l_g_inh += GAMMA_VNPKJ * s;
+        l_g_ex += sum;
+      } else if (pid < N_PKJ + N_ST + N_VN + N_IO) {  //update vn->io
+        auto mf_firing_rate = 0.003f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD));
+        l_g_ex += (genrand(&seed) < mf_firing_rate);
+      }
 
       // update v
       auto du1 = DT * inv_c * (-gbar_leak           * (l_u - e_leak)
+                               -gbar_ex   * l_g_ex  * (l_u - e_ex)
+                               -gbar_inh  * l_g_inh * (l_u - e_inh)
                                -gbar_ahp  * l_g_ahp * (l_u - e_ahp)
                                +i_ex);
       auto du2 = DT * inv_c * (-gbar_leak           * (l_u + du1 - e_leak)
+                               -gbar_ex   * l_g_ex  * (l_u + du1 - e_ex)
+                               -gbar_inh  * l_g_inh * (l_u + du1 - e_inh)
                                -gbar_ahp  * l_g_ahp * (l_u + du1 - e_ahp)
                                +i_ex);
 
       l_u += 0.5f * (du1 + du2);
       spk = l_u > th;
+      l_g_ex *= decay_ex;
+      l_g_inh *= decay_inh;
+      l_g_ahp = l_g_ahp * decay_ahp * (!spk) + spk;
       u[target_neuron_id]                 = e_leak * spk + l_u * (!spk);
+      g_ex[target_neuron_id]              = l_g_ex;
+      g_inh[target_neuron_id]             = l_g_inh;
       g_ahp[target_neuron_id]             = l_g_ahp;
       s_mol[target_neuron_id - IDX_H_MOL] = spk;
     }
@@ -239,16 +393,16 @@ static void store_spikes(const int pid, const int tid, const int index, const in
        if (index < T_GR_P)  spkp_buf[t_i * N_ALL_P + index] = (char)(s_gr[pid] & (1UL << tid));
   else if (index < T_GO_P)  spkp_buf[t_i * N_ALL_P + index] =  s_go[index - N_GR_P];
   else if (index < T_PKJ_P) spkp_buf[t_i * N_ALL_P + index] = s_mol[index - N_GR_P - N_GO_P];
-  else if (index < T_ST_P)  spkp_buf[t_i * N_ALL_P + index] = s_mol[index - N_GR_P - N_GO_P - N_PKJ_P];
-  else if (index < T_VN_P)  spkp_buf[t_i * N_ALL_P + index] = s_mol[index - N_GR_P - N_GO_P - N_PKJ_P - N_ST_P];
-  else if (index < T_IO_P)  spkp_buf[t_i * N_ALL_P + index] = s_mol[index - N_GR_P - N_GO_P - N_PKJ_P - N_ST_P - N_VN_P];
+  else if (index < T_ST_P)  spkp_buf[t_i * N_ALL_P + index] = s_mol[index - N_GR_P - N_GO_P];
+  else if (index < T_VN_P)  spkp_buf[t_i * N_ALL_P + index] = s_mol[index - N_GR_P - N_GO_P];
+  else if (index < T_IO_P)  spkp_buf[t_i * N_ALL_P + index] = s_mol[index - N_GR_P - N_GO_P];
   flush_L1();
 }
 
 void pzc_kernel(unsigned int* seeds, unsigned short* lists,
                 unsigned long* s_gr, unsigned char* s_go, unsigned char* s_mol,
                 float* u, float* g_ex, float* g_inh, float* g_ahp,
-                char* spikep_buf, float* debug, const int t_e) {
+                float* sum, unsigned int* w, char* spikep_buf, float* debug, const int t_e) {
   auto tid = get_tid();
   auto pid = get_pid();
   auto index = pid * MAX_TID + tid;
@@ -258,9 +412,13 @@ void pzc_kernel(unsigned int* seeds, unsigned short* lists,
   for (auto t_i = 0; t_i < T_I; t_i++) {
     update_gr(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_inh, g_ahp, s_gr, lists + N_GO * N_GO, s_go, working_buf);
     flush();
+    calc_input_pkjgr(pid, tid, index, sum, g_ex, seeds, s_gr, w, (float*)working_buf);
+    flush();
+    calc_input_stgr(pid, tid, index, sum, g_ex, seeds, s_gr, (float*)working_buf);
+    flush();
     update_go(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_ahp, s_go, lists, s_gr, (float*)working_buf);
     flush();
-    update_mol(pid, tid, index, t_i, u, g_ahp, s_mol);
+    update_mol(pid, tid, index, t_i, t_e, seeds, u, g_ex, g_inh, g_ahp, s_mol, (float*)working_buf);
     flush();
     store_spikes(pid, tid, index, t_i, spikep_buf, s_gr, s_go, s_mol);
     flush();

@@ -201,6 +201,10 @@ int main (int argc, char *argv[]) {
   err = pzclEnqueueWriteBuffer(queue, dev_s_gr, PZCL_TRUE, 0, sizeof(unsigned long) * N_S_GR, s_gr, 0, NULL, NULL);
   if (err) Error("pzclEnqueueWriteBuffer:%d s_gr\n", err);
 
+  unsigned long* s_gr_all = (unsigned long*)malloc(sizeof(unsigned long) * N_S_GR * 9);
+  if (s_gr_all == NULL) Error("failed malloc s_gr_all\n");
+  for (int i = 0; i < N_S_GR * 9; i++) s_gr_all[i] = 0;
+
   unsigned char* s_go = (unsigned char*)malloc(sizeof(unsigned char) * N_GO);
   if (s_go == NULL) Error("failed malloc s_go\n");
   for (int i = 0; i < N_GO; i++) s_go[i] = 0;
@@ -284,18 +288,51 @@ int main (int argc, char *argv[]) {
   err = pzclEnqueueWriteBuffer(queue, dev_spikep_buf, PZCL_TRUE, 0, sizeof(char) * N_ALL_P * T_I, spikep_buf, 0, NULL, NULL);
   if (err) Error("pzclEnqueueWriteBuffer:%d spikep_buf\n", err);
 
-  float* debug = (float*)malloc(sizeof(float) * 2 * T_I);
+  float* debug = (float*)malloc(sizeof(float) * WORK_UNIT_SIZE);
   if (debug == NULL) Error("failed malloc debug\n");
-  for (int i = 0; i < 2 * T_I; i++) debug[i] = 0;
-  pzcl_mem dev_debug = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(float) * 2 * T_I, NULL, &err);
+  for (int i = 0; i < WORK_UNIT_SIZE; i++) debug[i] = 0.0f;
+  pzcl_mem dev_debug = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(float) * WORK_UNIT_SIZE, NULL, &err);
   if (err) Error("pzclCreateBuffer:%d dev_debug\n", err);
-  err = pzclEnqueueWriteBuffer(queue, dev_debug, PZCL_TRUE, 0, sizeof(float) * 2 * T_I, debug, 0, NULL, NULL);
+  err = pzclEnqueueWriteBuffer(queue, dev_debug, PZCL_TRUE, 0, sizeof(float) * WORK_UNIT_SIZE, debug, 0, NULL, NULL);
   if (err) Error("pzclEnqueueWriteBuffer:%d debug\n", err);
+
+  float* sum = (float*)malloc(sizeof(float) * 2048);
+  if (sum == NULL) Error("failed malloc sum\n");
+  for (int i = 0; i < 2048; i++) sum[i] = 0.0f;
+  pzcl_mem dev_sum = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(float) * 2048, NULL, &err);
+  if (err) Error("pzclCreateBuffer:%d dev_sum\n", err);
+  err = pzclEnqueueWriteBuffer(queue, dev_sum, PZCL_TRUE, 0, sizeof(float) * 2048, sum, 0, NULL, NULL);
+  if (err) Error("pzclEnqueueWriteBuffer:%d sum\n", err);
+
+  unsigned int* w = (unsigned int*)malloc(sizeof(unsigned int) * (N_GR / 4) * N_PKJ);
+  if (w == NULL) Error("failed malloc w\n");
+  for (int i = 0; i < (N_GR / 4) * N_PKJ; i++) w[i] = 0xffffffff;
+  pzcl_mem dev_w = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(unsigned int) * (N_GR / 4) * N_PKJ, NULL, &err);
+  if (err) Error("pzclCreateBuffer:%d dev_w\n", err);
+  err = pzclEnqueueWriteBuffer(queue, dev_w, PZCL_TRUE, 0, sizeof(unsigned int) * (N_GR / 4) * N_PKJ, w, 0, NULL, NULL);
+  if (err) Error("pzclEnqueueWriteBuffer:%d w\n", err);
 
   char* h_spikep_buf = (char*)malloc(sizeof(char) * N_ALL_P * N_PERIOD);
 
   size_t work_unit_size = WORK_UNIT_SIZE;
   pzcl_event event = NULL;
+
+  MPI_Status status_mpi;
+  MPI_Request request[16];
+  int dst_rank, src_rank, rank_list[8];
+
+  int size = 2;
+  int row = world_rank / size;
+  int col = world_rank % size;
+
+  rank_list[0] = ((col - 1 + size) % size) + size * ((row - 1 + size) % size); //UpperLeft
+  rank_list[1] = ( col                   ) + size * ((row - 1 + size) % size); //Upper
+  rank_list[2] = ((col + 1       ) % size) + size * ((row - 1 + size) % size); //UpperRight
+  rank_list[3] = ((col - 1 + size) % size) + size * ( row                   ); //Left
+  rank_list[4] = ((col + 1       ) % size) + size * ( row                   ); //Right
+  rank_list[5] = ((col - 1 + size) % size) + size * ((row + 1       ) % size); //LowerLeft
+  rank_list[6] = ( col                   ) + size * ((row + 1       ) % size); //Lower
+  rank_list[7] = ((col + 1       ) % size) + size * ((row + 1       ) % size); //LowerRight
 
   for (int nt = 0; nt < N_TRIALS; nt++) {
     FILE* fgr_spk;
@@ -304,22 +341,26 @@ int main (int argc, char *argv[]) {
       char fn[1024];
       sprintf(fn, "gr.spk.%d.%d", world_rank, nt);
       fgr_spk = fopen(fn, "w");
+#ifdef DEBUG
       sprintf(fn, "log.%d.%d", world_rank, nt);
       log = fopen(fn, "w");
+#endif
       fprintf(stderr, "== %2d ==\n", nt);
     }
 
-    pzclSetKernelArg(kernel, 0, sizeof(pzcl_mem), &dev_seeds);
-    pzclSetKernelArg(kernel, 1, sizeof(pzcl_mem), &dev_lists);
-    pzclSetKernelArg(kernel, 2, sizeof(pzcl_mem), &dev_s_gr);
-    pzclSetKernelArg(kernel, 3, sizeof(pzcl_mem), &dev_s_go);
-    pzclSetKernelArg(kernel, 4, sizeof(pzcl_mem), &dev_s_mol);
-    pzclSetKernelArg(kernel, 5, sizeof(pzcl_mem), &dev_u);
-    pzclSetKernelArg(kernel, 6, sizeof(pzcl_mem), &dev_g_ex);
-    pzclSetKernelArg(kernel, 7, sizeof(pzcl_mem), &dev_g_inh);
-    pzclSetKernelArg(kernel, 8, sizeof(pzcl_mem), &dev_g_ahp);
-    pzclSetKernelArg(kernel, 9, sizeof(pzcl_mem), &dev_spikep_buf);
-    pzclSetKernelArg(kernel, 10, sizeof(pzcl_mem), &dev_debug);
+    pzclSetKernelArg(kernel,  0, sizeof(pzcl_mem), &dev_seeds);
+    pzclSetKernelArg(kernel,  1, sizeof(pzcl_mem), &dev_lists);
+    pzclSetKernelArg(kernel,  2, sizeof(pzcl_mem), &dev_s_gr);
+    pzclSetKernelArg(kernel,  3, sizeof(pzcl_mem), &dev_s_go);
+    pzclSetKernelArg(kernel,  4, sizeof(pzcl_mem), &dev_s_mol);
+    pzclSetKernelArg(kernel,  5, sizeof(pzcl_mem), &dev_u);
+    pzclSetKernelArg(kernel,  6, sizeof(pzcl_mem), &dev_g_ex);
+    pzclSetKernelArg(kernel,  7, sizeof(pzcl_mem), &dev_g_inh);
+    pzclSetKernelArg(kernel,  8, sizeof(pzcl_mem), &dev_g_ahp);
+    pzclSetKernelArg(kernel,  9, sizeof(pzcl_mem), &dev_sum);
+    pzclSetKernelArg(kernel, 10, sizeof(pzcl_mem), &dev_w);
+    pzclSetKernelArg(kernel, 11, sizeof(pzcl_mem), &dev_spikep_buf);
+    pzclSetKernelArg(kernel, 12, sizeof(pzcl_mem), &dev_debug);
 
     if (world_rank == 0) timer_start();
 
@@ -327,7 +368,39 @@ int main (int argc, char *argv[]) {
     for (int t_e = 0; t_e < N_PERIOD; t_e += T_I) {
       count++;
 
-      pzclSetKernelArg(kernel, 11, sizeof(int), &t_e);
+      pzclSetKernelArg(kernel, 13, sizeof(int), &t_e);
+
+      // Gr spikes are exchaged
+      for (int rb = 0; rb < 2; rb++) {
+        if ((row + col) % 2 == rb) {
+          for (int nn = 0; nn < 8; nn++) {
+            if (0 <= nn && nn <= 2) {
+              MPI_Isend(&s_gr[N_S_GR / 4 * 3], N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn]);
+            }
+            if (3 == nn || nn == 4) {
+              MPI_Isend(s_gr, N_S_GR, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn]);
+            }
+            if (5 <= nn && nn <= 7) {
+              MPI_Isend(s_gr, N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn]);
+            }
+          }
+        } else {
+          for (int nn = 0; nn < 8; nn++) {
+            if (0 <= nn && nn <= 2) {
+              MPI_Irecv(&s_gr_all[nn * N_S_GR + N_S_GR / 4 * 3], N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn + 8]);
+            }
+            if (nn == 3) {
+              MPI_Irecv(&s_gr_all[nn * N_S_GR], N_S_GR, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn + 8]);
+            }
+            if (nn == 4) {
+              MPI_Irecv(&s_gr_all[(nn + 1) * N_S_GR], N_S_GR, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn + 8]);
+            }
+            if (5 <= nn && nn <= 7) {
+              MPI_Irecv(&s_gr_all[(nn + 1) * N_S_GR], N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn + 8]);
+            }
+          }
+        }
+      }
 
       err = pzclEnqueueNDRangeKernel(queue, kernel, 1, NULL, &work_unit_size, NULL, 0, NULL, &event);
       if (err) Error("pzclEnqueueNDRangeKernel: %d\n", err);
@@ -341,26 +414,26 @@ int main (int argc, char *argv[]) {
       if (spikep_buf == NULL) Error("Enpty spikep_buf.\n");
 #ifdef DEBUG
       fprintf(log, "t:%d\t", t_e + T_I);
-      err = pzclEnqueueReadBuffer(queue, dev_u, PZCL_TRUE, 0, sizeof(float) * N_ALL, u, 0, NULL, NULL);
-      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      err = pzclEnqueueReadBuffer(queue, dev_s_mol, PZCL_TRUE, 0, sizeof(unsigned char) * N_MOL, s_mol, 0, NULL, NULL);
-      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      fprintf(log, "v:%f\tspk:%d %d %d %d\t", u[IDX_H_PKJ],
-              spikep_buf[T_GO_P], spikep_buf[N_ALL_P + T_GO_P], spikep_buf[N_ALL_P * 2 + T_GO_P], spikep_buf[N_ALL_P * 3 + T_GO_P]);
-      fprintf(log, "s_mol:%d\t", s_mol[0]);
-      //err = pzclEnqueueReadBuffer(queue, dev_g_ex, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_ex, 0, NULL, NULL);
+      //err = pzclEnqueueReadBuffer(queue, dev_u, PZCL_TRUE, 0, sizeof(float) * N_ALL, u, 0, NULL, NULL);
       //if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      //fprintf(log, "g_ex:%f\t", g_ex[0]);
+      //err = pzclEnqueueReadBuffer(queue, dev_s_mol, PZCL_TRUE, 0, sizeof(unsigned char) * N_MOL, s_mol, 0, NULL, NULL);
+      //if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
+      //fprintf(log, "v:%f\tspk:%d %d %d %d\t", u[IDX_H_PKJ],
+      //        spikep_buf[T_GO_P], spikep_buf[N_ALL_P + T_GO_P], spikep_buf[N_ALL_P * 2 + T_GO_P], spikep_buf[N_ALL_P * 3 + T_GO_P]);
+      //fprintf(log, "s_mol:%d\t", s_mol[0]);
+      err = pzclEnqueueReadBuffer(queue, dev_g_ex, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_ex, 0, NULL, NULL);
+      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
+      fprintf(log, "g_ex:%f\t", g_ex[IDX_H_IO]);
       //err = pzclEnqueueReadBuffer(queue, dev_g_inh, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_inh, 0, NULL, NULL);
       //if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
       //fprintf(log, "g_inh:%f\n", g_inh[0]);
-      err = pzclEnqueueReadBuffer(queue, dev_g_ahp, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_ahp, 0, NULL, NULL);
-      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      fprintf(log, "g_ahp:%f\t", g_ahp[IDX_H_PKJ]);
-      err = pzclEnqueueReadBuffer(queue, dev_debug, PZCL_TRUE, 0, sizeof(float) * 2 * T_I, debug, 0, NULL, NULL);
-      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      fprintf(log, "debug:");
-      for (int i = 0; i < 2 * T_I; i++) fprintf(log, "%f ", debug[i]);
+      //err = pzclEnqueueReadBuffer(queue, dev_g_ahp, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_ahp, 0, NULL, NULL);
+      //if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
+      //fprintf(log, "g_ahp:%f\t", g_ahp[IDX_H_PKJ]);
+      //err = pzclEnqueueReadBuffer(queue, dev_debug, PZCL_TRUE, 0, sizeof(float) * WORK_UNIT_SIZE, debug, 0, NULL, NULL);
+      //if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
+      //fprintf(log, "debug:");
+      //for (int i = 0; i < WORK_UNIT_SIZE; i++) fprintf(log, "%6.0f ", debug[i]);
       fprintf(log, "\n");
 #endif
 
@@ -381,7 +454,9 @@ int main (int argc, char *argv[]) {
           if (h_spikep_buf[t * N_ALL_P + i] != 0) fprintf(fgr_spk, "%d %d\n", t, i);
       }
       fclose(fgr_spk);
+#ifdef DEBUG
       fclose(log);
+#endif
     }
   }
 
@@ -390,21 +465,31 @@ int main (int argc, char *argv[]) {
   free(lists);
   free(s_gr);
   free(s_go);
+  free(s_mol);
   free(u);
   free(g_ex);
+  free(g_inh);
   free(g_ahp);
+  free(sum);
+  free(w);
   free(spikep_buf);
-
+  free(debug);
+  
   // Release PZCL Resources
   pzclReleaseEvent(event);
   pzclReleaseMemObject(dev_seeds);
   pzclReleaseMemObject(dev_lists);
   pzclReleaseMemObject(dev_s_gr);
   pzclReleaseMemObject(dev_s_go);
+  pzclReleaseMemObject(dev_s_mol);
   pzclReleaseMemObject(dev_u);
   pzclReleaseMemObject(dev_g_ex);
+  pzclReleaseMemObject(dev_g_inh);
   pzclReleaseMemObject(dev_g_ahp);
+  pzclReleaseMemObject(dev_sum);
+  pzclReleaseMemObject(dev_w);
   pzclReleaseMemObject(dev_spikep_buf);
+  pzclReleaseMemObject(dev_debug);
   pzclReleaseCommandQueue(queue);
   pzclReleaseKernel(kernel);
   pzclReleaseProgram(program);
