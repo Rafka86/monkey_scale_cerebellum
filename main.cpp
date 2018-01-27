@@ -193,17 +193,22 @@ int main (int argc, char *argv[]) {
   // Data Setup
   //
 
-  unsigned long* s_gr = (unsigned long*)malloc(sizeof(unsigned long) * N_S_GR);
-  if (s_gr == NULL) Error("failed malloc s_gr\n");
-  for (int i = 0; i < N_S_GR; i++) s_gr[i] = 0;
+  unsigned long* s_gr_all = (unsigned long*)malloc(sizeof(unsigned long) * N_S_GR * 9);
+  unsigned long* s_gr     = &s_gr_all[N_S_GR * 4];
+  if (s_gr_all == NULL) Error("failed malloc s_gr_all\n");
+  for (int i = 0; i < N_S_GR * 9; i++) s_gr_all[i] = 0;
   pzcl_mem dev_s_gr = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(unsigned long) * N_S_GR, NULL, &err);
   if (err) Error("pzclCreateBuffer:%d dev_s_gr\n", err);
   err = pzclEnqueueWriteBuffer(queue, dev_s_gr, PZCL_TRUE, 0, sizeof(unsigned long) * N_S_GR, s_gr, 0, NULL, NULL);
   if (err) Error("pzclEnqueueWriteBuffer:%d s_gr\n", err);
 
-  unsigned long* s_gr_all = (unsigned long*)malloc(sizeof(unsigned long) * N_S_GR * 9);
-  if (s_gr_all == NULL) Error("failed malloc s_gr_all\n");
-  for (int i = 0; i < N_S_GR * 9; i++) s_gr_all[i] = 0;
+  unsigned long* s_gr_rect = (unsigned long*)malloc(sizeof(unsigned long) * N_S_GR * 3);
+  if (s_gr_rect == NULL) Error("failed malloc s_gr_rect\n");
+  for (int i = 0; i < N_S_GR * 3; i++) s_gr_rect[i] = 0;
+  pzcl_mem dev_s_gr_rect = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(unsigned long) * N_S_GR * 3, NULL, &err);
+  if (err) Error("pzclCreateBuffer:%d dev_s_gr_rect\n", err);
+  err = pzclEnqueueWriteBuffer(queue, dev_s_gr_rect, PZCL_TRUE, 0, sizeof(unsigned long) * N_S_GR * 3, s_gr_rect, 0, NULL, NULL);
+  if (err) Error("pzclEnqueueWriteBuffer:%d s_gr_rect\n", err);
 
   unsigned char* s_go = (unsigned char*)malloc(sizeof(unsigned char) * N_GO);
   if (s_go == NULL) Error("failed malloc s_go\n");
@@ -351,16 +356,17 @@ int main (int argc, char *argv[]) {
     pzclSetKernelArg(kernel,  0, sizeof(pzcl_mem), &dev_seeds);
     pzclSetKernelArg(kernel,  1, sizeof(pzcl_mem), &dev_lists);
     pzclSetKernelArg(kernel,  2, sizeof(pzcl_mem), &dev_s_gr);
-    pzclSetKernelArg(kernel,  3, sizeof(pzcl_mem), &dev_s_go);
-    pzclSetKernelArg(kernel,  4, sizeof(pzcl_mem), &dev_s_mol);
-    pzclSetKernelArg(kernel,  5, sizeof(pzcl_mem), &dev_u);
-    pzclSetKernelArg(kernel,  6, sizeof(pzcl_mem), &dev_g_ex);
-    pzclSetKernelArg(kernel,  7, sizeof(pzcl_mem), &dev_g_inh);
-    pzclSetKernelArg(kernel,  8, sizeof(pzcl_mem), &dev_g_ahp);
-    pzclSetKernelArg(kernel,  9, sizeof(pzcl_mem), &dev_sum);
-    pzclSetKernelArg(kernel, 10, sizeof(pzcl_mem), &dev_w);
-    pzclSetKernelArg(kernel, 11, sizeof(pzcl_mem), &dev_spikep_buf);
-    pzclSetKernelArg(kernel, 12, sizeof(pzcl_mem), &dev_debug);
+    pzclSetKernelArg(kernel,  3, sizeof(pzcl_mem), &dev_s_gr_rect);
+    pzclSetKernelArg(kernel,  4, sizeof(pzcl_mem), &dev_s_go);
+    pzclSetKernelArg(kernel,  5, sizeof(pzcl_mem), &dev_s_mol);
+    pzclSetKernelArg(kernel,  6, sizeof(pzcl_mem), &dev_u);
+    pzclSetKernelArg(kernel,  7, sizeof(pzcl_mem), &dev_g_ex);
+    pzclSetKernelArg(kernel,  8, sizeof(pzcl_mem), &dev_g_inh);
+    pzclSetKernelArg(kernel,  9, sizeof(pzcl_mem), &dev_g_ahp);
+    pzclSetKernelArg(kernel, 10, sizeof(pzcl_mem), &dev_sum);
+    pzclSetKernelArg(kernel, 11, sizeof(pzcl_mem), &dev_w);
+    pzclSetKernelArg(kernel, 12, sizeof(pzcl_mem), &dev_spikep_buf);
+    pzclSetKernelArg(kernel, 13, sizeof(pzcl_mem), &dev_debug);
 
     if (world_rank == 0) timer_start();
 
@@ -368,72 +374,102 @@ int main (int argc, char *argv[]) {
     for (int t_e = 0; t_e < N_PERIOD; t_e += T_I) {
       count++;
 
-      pzclSetKernelArg(kernel, 13, sizeof(int), &t_e);
+      pzclSetKernelArg(kernel, 14, sizeof(int), &t_e);
 
       // Gr spikes are exchaged
-      for (int rb = 0; rb < 2; rb++) {
-        if ((row + col) % 2 == rb) {
-          for (int nn = 0; nn < 8; nn++) {
-            if (0 <= nn && nn <= 2) {
-              MPI_Isend(&s_gr[N_S_GR / 4 * 3], N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn]);
-            }
-            if (3 == nn || nn == 4) {
-              MPI_Isend(s_gr, N_S_GR, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn]);
-            }
-            if (5 <= nn && nn <= 7) {
-              MPI_Isend(s_gr, N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn]);
-            }
-          }
-        } else {
-          for (int nn = 0; nn < 8; nn++) {
-            if (0 <= nn && nn <= 2) {
-              MPI_Irecv(&s_gr_all[nn * N_S_GR + N_S_GR / 4 * 3], N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn + 8]);
-            }
-            if (nn == 3) {
-              MPI_Irecv(&s_gr_all[nn * N_S_GR], N_S_GR, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn + 8]);
-            }
-            if (nn == 4) {
-              MPI_Irecv(&s_gr_all[(nn + 1) * N_S_GR], N_S_GR, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn + 8]);
-            }
-            if (5 <= nn && nn <= 7) {
-              MPI_Irecv(&s_gr_all[(nn + 1) * N_S_GR], N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn + 8]);
-            }
-          }
-        }
-      }
+      //for (int rb = 0; rb < 2; rb++) {
+      //  if ((row + col) % 2 == rb) {
+      //    for (int nn = 0; nn < 8; nn++) {
+      //      if (0 <= nn && nn <= 2) {
+      //        MPI_Isend(&s_gr[N_S_GR / 4 * 3], N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn]);
+      //      }
+      //      if (3 == nn || nn == 4) {
+      //        MPI_Isend(s_gr, N_S_GR, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn]);
+      //      }
+      //      if (5 <= nn && nn <= 7) {
+      //        MPI_Isend(s_gr, N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn]);
+      //      }
+      //    }
+      //  } else {
+      //    for (int nn = 0; nn < 8; nn++) {
+      //      if (0 <= nn && nn <= 2) {
+      //        MPI_Irecv(&s_gr_all[nn * N_S_GR + N_S_GR / 4 * 3], N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn + 8]);
+      //      }
+      //      if (nn == 3) {
+      //        MPI_Irecv(&s_gr_all[nn * N_S_GR], N_S_GR, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn + 8]);
+      //      }
+      //      if (nn == 4) {
+      //        MPI_Irecv(&s_gr_all[(nn + 1) * N_S_GR], N_S_GR, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn + 8]);
+      //      }
+      //      if (5 <= nn && nn <= 7) {
+      //        MPI_Irecv(&s_gr_all[(nn + 1) * N_S_GR], N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[nn], 1, MPI_COMM_WORLD, &request[nn + 8]);
+      //      }
+      //    }
+      //  }
+      //}
+
+      err = pzclEnqueueWriteBuffer(queue, dev_s_gr_rect, PZCL_TRUE, 0, sizeof(unsigned long) * N_S_GR * 3, s_gr_rect, 0, NULL, NULL);
+      if (err) Error("pzclEnqueueWriteBuffer: %d\n", err);
 
       err = pzclEnqueueNDRangeKernel(queue, kernel, 1, NULL, &work_unit_size, NULL, 0, NULL, &event);
       if (err) Error("pzclEnqueueNDRangeKernel: %d\n", err);
+
+      MPI_Sendrecv(    &s_gr[             N_S_GR / 4 * 3], N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[7], 1,
+                   &s_gr_all[             N_S_GR / 4 * 3], N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[0], 1,
+                   MPI_COMM_WORLD, &status_mpi);
+      MPI_Sendrecv(    &s_gr[             N_S_GR / 4 * 3], N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[6], 1,
+                   &s_gr_all[N_S_GR     + N_S_GR / 4 * 3], N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[1], 1,
+                   MPI_COMM_WORLD, &status_mpi);
+      MPI_Sendrecv(    &s_gr[             N_S_GR / 4 * 3], N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[5], 1,
+                   &s_gr_all[N_S_GR * 2 + N_S_GR / 4 * 3], N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[2], 1,
+                   MPI_COMM_WORLD, &status_mpi);
+      MPI_Sendrecv(     s_gr                             , N_S_GR    , MPI_UNSIGNED_LONG, rank_list[4], 1,
+                   &s_gr_all[N_S_GR * 3                 ], N_S_GR    , MPI_UNSIGNED_LONG, rank_list[3], 1,
+                   MPI_COMM_WORLD, &status_mpi);
+      MPI_Sendrecv(     s_gr                             , N_S_GR    , MPI_UNSIGNED_LONG, rank_list[3], 1,
+                   &s_gr_all[N_S_GR * 5                 ], N_S_GR    , MPI_UNSIGNED_LONG, rank_list[4], 1,
+                   MPI_COMM_WORLD, &status_mpi);
+      MPI_Sendrecv(     s_gr                             , N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[2], 1,
+                   &s_gr_all[N_S_GR * 6                 ], N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[5], 1,
+                   MPI_COMM_WORLD, &status_mpi);
+      MPI_Sendrecv(     s_gr                             , N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[1], 1,
+                   &s_gr_all[N_S_GR * 7                 ], N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[6], 1,
+                   MPI_COMM_WORLD, &status_mpi);
+      MPI_Sendrecv(     s_gr                             , N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[0], 1,
+                   &s_gr_all[N_S_GR * 8                 ], N_S_GR / 4, MPI_UNSIGNED_LONG, rank_list[7], 1,
+                   MPI_COMM_WORLD, &status_mpi);
+
       if (event) {
         err = pzclWaitForEvents(1, &event);
         if (err) Error("pzclWaitForEvents: %d in trial.\n", err);
       }
 
+      err = pzclEnqueueReadBuffer(queue, dev_s_gr, PZCL_TRUE, 0, sizeof(unsigned long) * N_S_GR, s_gr, 0, NULL, NULL);
+      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
       err = pzclEnqueueReadBuffer(queue, dev_spikep_buf, PZCL_TRUE, 0, sizeof(char) * N_ALL_P * T_I, spikep_buf, 0, NULL, NULL);
       if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      if (spikep_buf == NULL) Error("Enpty spikep_buf.\n");
 #ifdef DEBUG
       fprintf(log, "t:%d\t", t_e + T_I);
-      //err = pzclEnqueueReadBuffer(queue, dev_u, PZCL_TRUE, 0, sizeof(float) * N_ALL, u, 0, NULL, NULL);
-      //if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      //err = pzclEnqueueReadBuffer(queue, dev_s_mol, PZCL_TRUE, 0, sizeof(unsigned char) * N_MOL, s_mol, 0, NULL, NULL);
-      //if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      //fprintf(log, "v:%f\tspk:%d %d %d %d\t", u[IDX_H_PKJ],
-      //        spikep_buf[T_GO_P], spikep_buf[N_ALL_P + T_GO_P], spikep_buf[N_ALL_P * 2 + T_GO_P], spikep_buf[N_ALL_P * 3 + T_GO_P]);
-      //fprintf(log, "s_mol:%d\t", s_mol[0]);
+      err = pzclEnqueueReadBuffer(queue, dev_u, PZCL_TRUE, 0, sizeof(float) * N_ALL, u, 0, NULL, NULL);
+      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
+      err = pzclEnqueueReadBuffer(queue, dev_s_mol, PZCL_TRUE, 0, sizeof(unsigned char) * N_MOL, s_mol, 0, NULL, NULL);
+      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
+      fprintf(log, "v:%f\tspk:%d %d %d %d\t", u[IDX_H_PKJ],
+              spikep_buf[T_GO_P], spikep_buf[N_ALL_P + T_GO_P], spikep_buf[N_ALL_P * 2 + T_GO_P], spikep_buf[N_ALL_P * 3 + T_GO_P]);
+      fprintf(log, "s_mol:%d\t", s_mol[0]);
       err = pzclEnqueueReadBuffer(queue, dev_g_ex, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_ex, 0, NULL, NULL);
       if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
       fprintf(log, "g_ex:%f\t", g_ex[IDX_H_IO]);
-      //err = pzclEnqueueReadBuffer(queue, dev_g_inh, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_inh, 0, NULL, NULL);
-      //if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      //fprintf(log, "g_inh:%f\n", g_inh[0]);
-      //err = pzclEnqueueReadBuffer(queue, dev_g_ahp, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_ahp, 0, NULL, NULL);
-      //if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      //fprintf(log, "g_ahp:%f\t", g_ahp[IDX_H_PKJ]);
-      //err = pzclEnqueueReadBuffer(queue, dev_debug, PZCL_TRUE, 0, sizeof(float) * WORK_UNIT_SIZE, debug, 0, NULL, NULL);
-      //if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      //fprintf(log, "debug:");
-      //for (int i = 0; i < WORK_UNIT_SIZE; i++) fprintf(log, "%6.0f ", debug[i]);
+      err = pzclEnqueueReadBuffer(queue, dev_g_inh, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_inh, 0, NULL, NULL);
+      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
+      fprintf(log, "g_inh:%f\n", g_inh[0]);
+      err = pzclEnqueueReadBuffer(queue, dev_g_ahp, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_ahp, 0, NULL, NULL);
+      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
+      fprintf(log, "g_ahp:%f\t", g_ahp[IDX_H_PKJ]);
+      err = pzclEnqueueReadBuffer(queue, dev_debug, PZCL_TRUE, 0, sizeof(float) * WORK_UNIT_SIZE, debug, 0, NULL, NULL);
+      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
+      fprintf(log, "debug:");
+      for (int i = 0; i < WORK_UNIT_SIZE; i++) fprintf(log, "%6.0f ", debug[i]);
       fprintf(log, "\n");
 #endif
 
@@ -441,6 +477,27 @@ int main (int argc, char *argv[]) {
         int t_each = t_e + t_i;
         for (int i = 0; i < N_ALL_P; i++) {
           h_spikep_buf[t_each * N_ALL_P + i] = spikep_buf[t_i * N_ALL_P + i];
+        }
+      }
+
+      // Wait data exchange
+      //for (int i = 0; i < 16; i++) MPI_Wait(&request[i], &status_mpi);
+
+      // Crop necessary region and rearrange
+      for (int dx = -X_GO_4; dx < X_GO + X_GO_4; dx++) {
+        int xx = (dx < 0) * (0) + (0 <= dx && dx < X_GO) * (1) + (dx >= X_GO) * (2);
+        int ax = (dx + X_GO) % X_GO;
+        int ax_rect = dx + X_GO_4;
+        for (int dy = -Y_GO_4; dy < Y_GO + Y_GO_4; dy++) {
+          int yy = (dy < 0) * (0) + (0 <= dy && dy < Y_GO) * (1) + (dy >= Y_GO) * (2);
+          int ay = (dy + Y_GO) % Y_GO;
+          int ay_rect = dy + Y_GO_4;
+          int ii = xx * 3 + yy;
+          int base = N_S_GR * ii;
+          int idx = ax + X_GO * ay;
+          int idx_rect = ax_rect + (X_GO + X_GO_2) * ay_rect;
+          for (int z = 0; z < 16; z++)
+            s_gr_rect[idx_rect * 16 + z] = s_gr_all[base + idx * 16 + z];
         }
       }
     }
@@ -463,7 +520,8 @@ int main (int argc, char *argv[]) {
   // Release memory objects
   free(seeds);
   free(lists);
-  free(s_gr);
+  free(s_gr_all);
+  free(s_gr_rect);
   free(s_go);
   free(s_mol);
   free(u);
@@ -480,6 +538,7 @@ int main (int argc, char *argv[]) {
   pzclReleaseMemObject(dev_seeds);
   pzclReleaseMemObject(dev_lists);
   pzclReleaseMemObject(dev_s_gr);
+  pzclReleaseMemObject(dev_s_gr_rect);
   pzclReleaseMemObject(dev_s_go);
   pzclReleaseMemObject(dev_s_mol);
   pzclReleaseMemObject(dev_u);

@@ -14,6 +14,10 @@
 
 #define N_S_GR (N_GR >> 6)
 #define N_W_GR (N_GR >> 2)
+#define X_GO_4 (X_GO >> 2)
+#define Y_GO_4 (Y_GO >> 2)
+#define X_GO_2 (X_GO >> 1)
+#define Y_GO_2 (Y_GO >> 1)
 
 #define TH_GR        (-35.0f)
 #define C_GR         (3.1f)

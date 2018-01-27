@@ -173,14 +173,13 @@ static void calc_input_pkjgr(const int pid, const int tid, const int index,
   auto count = 0;
   for (auto i = 0; i < 4; i++) {
     auto pkj_id = i * 8 + pref_id;
-    auto   x = local_pid >> 5;
-    auto   y = local_pid & 31;
-    auto  ax = x + pkj_id - 4 + (X_GO >> 1);
-    auto idx = (y + (Y_GO >> 1)) + 2 * Y_GO * ax;
-    idx %= N_GO;
+    auto   x = local_pid & 31;
+    auto   y = local_pid >> 5;
+    auto  ay = y + pkj_id - 4 + Y_GO_4;
+    auto idx = x + (X_GO + X_GO_2) * ay;
     auto local_sum = 0.0f;
-    auto sp = &s_gr[index];
-    auto w_base = pkj_id * N_W_GR + idx * 256 + tid * 16;  // 256 = R_N2 / 4
+    auto sp = &s_gr[idx];
+    auto w_base = pkj_id * N_W_GR + (idx & 0x1ff) * 256 + tid * 16;  // 256 = R_N2 / 4
     for (auto k = 0; k < 64; k += 4) {
       unsigned short z[4];
       z[0] = get_spike(*sp, k);
@@ -237,12 +236,9 @@ static void calc_input_stgr(const int pid, const int tid, const int index,
     auto st_id = i * 8 + pref_id;
     auto   x = local_pid >> 5;
     auto   y = local_pid & 31;
-    auto  ax = x + st_id - 4 + (X_GO >> 1);
-    auto idx = (y + (Y_GO >> 1)) + 2 * Y_GO * ax;
-    idx %= N_GO;
-    auto local_sum = 0.0f;
-    auto sp = s_gr[index];
-    local_sum += KAPPA_STPF * popl(sp);
+    auto  ay = y + st_id - 4 + Y_GO_4;
+    auto idx = x + (X_GO + X_GO_2) * ay;
+    auto local_sum = KAPPA_STPF * popl(s_gr[idx]);
     wbuf[tid] = local_sum;
     sync_L1();
     if (tid == 0) sum[pid] = wbuf[0] + wbuf[1] + wbuf[2] + wbuf[3] + wbuf[4] + wbuf[5] + wbuf[6] + wbuf[7];
@@ -400,7 +396,7 @@ static void store_spikes(const int pid, const int tid, const int index, const in
 }
 
 void pzc_kernel(unsigned int* seeds, unsigned short* lists,
-                unsigned long* s_gr, unsigned char* s_go, unsigned char* s_mol,
+                unsigned long* s_gr, unsigned long* s_gr_rect, unsigned char* s_go, unsigned char* s_mol,
                 float* u, float* g_ex, float* g_inh, float* g_ahp,
                 float* sum, unsigned int* w, char* spikep_buf, float* debug, const int t_e) {
   auto tid = get_tid();
@@ -412,11 +408,11 @@ void pzc_kernel(unsigned int* seeds, unsigned short* lists,
   for (auto t_i = 0; t_i < T_I; t_i++) {
     update_gr(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_inh, g_ahp, s_gr, lists + N_GO * N_GO, s_go, working_buf);
     flush();
-    calc_input_pkjgr(pid, tid, index, sum, g_ex, seeds, s_gr, w, (float*)working_buf);
+    calc_input_pkjgr(pid, tid, index, sum, g_ex, seeds, s_gr_rect, w, (float*)working_buf);
     flush();
-    calc_input_stgr(pid, tid, index, sum, g_ex, seeds, s_gr, (float*)working_buf);
+    calc_input_stgr(pid, tid, index, sum, g_ex, seeds, s_gr_rect, (float*)working_buf);
     flush();
-    update_go(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_ahp, s_go, lists, s_gr, (float*)working_buf);
+    update_go(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_ahp, s_go, lists, s_gr_rect, (float*)working_buf);
     flush();
     update_mol(pid, tid, index, t_i, t_e, seeds, u, g_ex, g_inh, g_ahp, s_mol, (float*)working_buf);
     flush();
