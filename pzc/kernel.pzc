@@ -3,8 +3,6 @@
 
 #include "../param.h"
 
-#define MAX_PID (2048)
-#define MAX_TID (8)
 #define OFFSET (MAX_TID)
 
 PZCPerformance gPerf[MAX_PROF];
@@ -126,12 +124,12 @@ static void update_go(const int pid, const int tid, const int index, const int t
                       const unsigned int* seeds, float* u, float* g_ex, float* g_ahp, unsigned char* s_go,
                       const unsigned short* list_gogr, const unsigned long* s_gr, float* wbuf) {
   auto seed = seeds[index];
-  if (pid < N_GO) {
-    auto target_neuron_id = pid + IDX_H_GO;
+  for (auto i = pid; i < N_GO; i += MAX_PID) {
+    auto target_neuron_id = i + IDX_H_GO;
 
     wbuf[tid] = 0.0f;
     for (auto j = tid; j < N_GR_PER_GO; j++) {
-      auto idx = list_gogr[pid * N_GO + j];
+      auto idx = list_gogr[i * N_GO + j];
       auto sp = &s_gr[idx * 16];
       auto spikes_gr = 0;
       for (auto k = 0; k < 16; k++)

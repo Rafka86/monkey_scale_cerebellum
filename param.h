@@ -179,8 +179,10 @@
 #define T_I (4)
 #define DT (1.0f)
 
-#define WORK_UNIT_SIZE (16384)//(15872) //1984PE * 8Thread
-#define N_MAX_THREADS (WORK_UNIT_SIZE)
+#define MAX_PID        (1984)
+#define MAX_TID        (8)
+#define WORK_UNIT_SIZE ((MAX_PID) * (MAX_TID))
+#define N_MAX_THREADS  (WORK_UNIT_SIZE)
 
 #define N_GR_P  (1024)
 #define N_GO_P  (N_GO)
