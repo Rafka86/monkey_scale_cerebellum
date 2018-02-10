@@ -1,3 +1,5 @@
+#include "modes.h"
+
 #define R_N2 (32 * 32)
 
 #define N_GR  (32 * 32 * R_N2)

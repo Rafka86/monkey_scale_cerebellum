@@ -1,10 +1,23 @@
 #include <pzc_builtin.h>
+#include "../../common/pzcperf.h"
 
 #include "../param.h"
 
 #define MAX_PID (2048)
 #define MAX_TID (8)
 #define OFFSET (MAX_TID)
+
+PZCPerformance gPerf[MAX_PROF];
+void pzc_GetPerformance(PZCPerformance* out, int idx) {
+  int tid = get_tid();
+  int pid = get_pid();
+
+  if (tid == 0 && pid == 0 && idx < MAX_PROF) {
+    *out = gPerf[idx];
+    gPerf[idx].Clear();
+  }
+  flush();
+}
 
 static inline unsigned short get_spike(unsigned long s, int i) {
   return (s >> i) & 1UL;
@@ -405,20 +418,82 @@ void pzc_kernel(unsigned int* seeds, unsigned short* lists,
 
   unsigned char* working_buf = (unsigned char*)(0x4000);
 
+#ifdef PROF
+  PZCPerformance stc_all, stc, etc;
+  if (pid == 0 && tid == 0) { stc_all.Update(); }
+#endif
+
   for (auto t_i = 0; t_i < T_I; t_i++) {
+#ifdef PROF
+    if (pid == 0 && tid == 0) { stc.Update(); }
+#endif
+
     update_gr(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_inh, g_ahp, s_gr, lists + N_GO * N_GO, s_go, working_buf);
     flush();
+
+#ifdef PROF
+    if (pid == 0 && tid == 0) {
+      etc.Update();
+      gPerf[UPDATE_GR] = etc - stc;
+      stc.Update();
+    }
+#endif
+
     calc_input_pkjgr(pid, tid, index, sum, g_ex, seeds, s_gr_rect, w, (float*)working_buf);
     flush();
+
+#ifdef PROF
+    if (pid == 0 && tid == 0) {
+      etc.Update();
+      gPerf[CALC_INPUT_PKJ] = etc - stc;
+      stc.Update();
+    }
+#endif
+
     calc_input_stgr(pid, tid, index, sum, g_ex, seeds, s_gr_rect, (float*)working_buf);
     flush();
+
+#ifdef PROF
+    if (pid == 0 && tid == 0) {
+      etc.Update();
+      gPerf[CALC_INPUT_ST] = etc - stc;
+      stc.Update();
+    }
+#endif
+
     update_go(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_ahp, s_go, lists, s_gr_rect, (float*)working_buf);
     flush();
+
+#ifdef PROF
+    if (pid == 0 && tid == 0) {
+      etc.Update();
+      gPerf[UPDATE_GO] = etc - stc;
+      stc.Update();
+    }
+#endif
+
     update_mol(pid, tid, index, t_i, t_e, seeds, u, g_ex, g_inh, g_ahp, s_mol, (float*)working_buf);
     flush();
+
+#ifdef PROF
+    if (pid == 0 && tid == 0) {
+      etc.Update();
+      gPerf[UPDATE_MOL] = etc - stc;
+      stc.Update();
+    }
+#endif
+#ifdef PRINT
     store_spikes(pid, tid, index, t_i, spikep_buf, s_gr, s_go, s_mol);
     flush();
+#endif
   }
+
+#ifdef PROF
+  if (pid == 0 && tid == 0) {
+    etc.Update();
+    gPerf[ALL] = etc - stc_all;
+  }
+#endif
 
   flush();
   return;

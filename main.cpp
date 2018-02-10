@@ -9,12 +9,12 @@
 
 #define MAX_DEVICE_IDS (8)
 
-//#define DEBUG
-
 #include "param.h"
+#include "../common/pzclutil.h"
 #define MAX_BINARY_SIZE (0x1000000)
 #define KERNEL_FILE "./kernel.sc2/kernel.sc2.pz"
 #define KERNEL_FUNC "kernel"
+#define KERNEL_PROF "GetPerformance"
 
 void Error(const char* message, ...) {
   va_list ap;
@@ -23,6 +23,57 @@ void Error(const char* message, ...) {
   vfprintf(stderr, message, ap);
   va_end(ap);
   exit(1);
+}
+
+PZCPerformance GetPerformance(pzcl_context context, pzcl_command_queue queue, pzcl_kernel kernel, int index) {
+  PZCPerformance perf;
+  pzcl_int result = 0;
+
+  pzcl_mem mem = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(PZCPerformance), NULL, &result);
+  if (mem == NULL) Error("pzclCreateBuffer failed, %d\n", result);
+
+  pzclSetKernelArg(kernel,  0, sizeof(pzcl_mem), (void*)&mem);
+  pzclSetKernelArg(kernel,  1, sizeof(int),    (void*)&index);
+
+  {
+    size_t global_work_size = 128;
+    if ((result = pzclEnqueueNDRangeKernel(queue, kernel, 1, NULL, &global_work_size, NULL, 0, NULL, NULL)) != PZCL_SUCCESS)
+      Error("pzclEnqueueNDRangeKernel failed, %d\n", result);
+  }
+
+  result = pzclEnqueueReadBuffer(queue, mem, PZCL_TRUE, 0, sizeof(PZCPerformance), &perf, 0, NULL, NULL);
+  if (result != PZCL_SUCCESS) Error("pzclEnqueueReadBuffer failed %d\n", result);
+
+  return perf;
+}
+
+void PrintProfileData(pzcl_context context, pzcl_command_queue queue, pzcl_kernel kernel, int nTrial) {
+  const double clock = 1000e6;
+  FILE* prof;
+  char* fn = new char[256];
+  sprintf(fn, "profile.trial%d.log", nTrial);
+  prof = fopen(fn, "w");
+  fprintf(prof, "%16s\t%27s\t%19s\t%19s\n", "SECTION", "PERFORMANCE", "STALL", "WAIT");
+  for (int i = 0; i < MAX_PROF; i++) {
+    PZCPerformance perf = GetPerformance(context, queue, kernel, i);
+    unsigned int perf_count = perf.Perf();
+    unsigned int stall      = perf.Stall();
+    unsigned int wait       = perf.Wait();
+    double sec  = perf_count / clock;
+    switch (i) {
+      case UPDATE_GR:      fprintf(prof, "%16s\t", "Update GR"); break;
+      case CALC_INPUT_PKJ: fprintf(prof, "%16s\t", "Calc Input PKJ"); break;
+      case CALC_INPUT_ST:  fprintf(prof, "%16s\t", "Calc Input ST"); break;
+      case UPDATE_GO:      fprintf(prof, "%16s\t", "Update GO"); break;
+      case UPDATE_MOL:     fprintf(prof, "%16s\t", "Update MOL"); break;
+      case ALL:            fprintf(prof, "%16s\t", "ALL"); break;
+      default:             fprintf(prof, "%16s\t", "Undef"); break;
+    }
+    fprintf(prof, "%8d (%e sec)\t", perf_count, (perf_count != 0) ? sec : 0.0);
+    fprintf(prof, "%8d (%5.3f %%)\t", stall, (perf_count != 0) ? stall * 100.0 / perf_count: 0.0 );
+    fprintf(prof, "%8d (%5.3f %%)\n", wait , (perf_count != 0) ? wait * 100.0 / perf_count: 0.0 );
+  }
+  fclose(prof);
 }
 
 static struct timeval start, stop;
@@ -185,6 +236,11 @@ int main (int argc, char *argv[]) {
 
   pzcl_kernel kernel = pzclCreateKernel(program, KERNEL_FUNC, &err);
   if (err) Error("pzclCreateKernel of %s: %d\n", KERNEL_FUNC, err);
+
+#ifdef PROF
+  pzcl_kernel kernel_prof = pzclCreateKernel(program, KERNEL_PROF, &err);
+  if (err) Error("pzclCreateKernel of %s: %d\n", KERNEL_PROF, err);
+#endif
 
   pzcl_command_queue queue = pzclCreateCommandQueue(context, device[device_id], 0, &err);
   if (err) Error("pzclCreateCommandQueue: %d\n", err);
@@ -510,6 +566,9 @@ int main (int argc, char *argv[]) {
         for (int i = 0; i < N_ALL_P; i++)
           if (h_spikep_buf[t * N_ALL_P + i] != 0) fprintf(fgr_spk, "%d %d\n", t, i);
       }
+#ifdef PROF
+      PrintProfileData(context, queue, kernel_prof, nt);
+#endif
       fclose(fgr_spk);
 #ifdef DEBUG
       fclose(log);
