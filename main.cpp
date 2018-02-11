@@ -73,6 +73,7 @@ void PrintProfileData(pzcl_context context, pzcl_command_queue queue, pzcl_kerne
     fprintf(prof, "%8d (%5.3f %%)\t", stall, (perf_count != 0) ? stall * 100.0 / perf_count: 0.0 );
     fprintf(prof, "%8d (%5.3f %%)\n", wait , (perf_count != 0) ? wait * 100.0 / perf_count: 0.0 );
   }
+  delete fn;
   fclose(prof);
 }
 
@@ -400,8 +401,10 @@ int main (int argc, char *argv[]) {
     FILE* log;
     if (world_rank == 0) {
       char fn[1024];
+#ifdef PRINT
       sprintf(fn, "gr.spk.%d.%d", world_rank, nt);
       fgr_spk = fopen(fn, "w");
+#endif
 #ifdef DEBUG
       sprintf(fn, "log.%d.%d", world_rank, nt);
       log = fopen(fn, "w");
@@ -502,8 +505,10 @@ int main (int argc, char *argv[]) {
 
       err = pzclEnqueueReadBuffer(queue, dev_s_gr, PZCL_TRUE, 0, sizeof(unsigned long) * N_S_GR, s_gr, 0, NULL, NULL);
       if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
+#ifdef PRINT
       err = pzclEnqueueReadBuffer(queue, dev_spikep_buf, PZCL_TRUE, 0, sizeof(char) * N_ALL_P * T_I, spikep_buf, 0, NULL, NULL);
       if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
+#endif
 #ifdef DEBUG
       fprintf(log, "t:%d\t", t_e + T_I);
       err = pzclEnqueueReadBuffer(queue, dev_u, PZCL_TRUE, 0, sizeof(float) * N_ALL, u, 0, NULL, NULL);
@@ -528,13 +533,14 @@ int main (int argc, char *argv[]) {
       for (int i = 0; i < WORK_UNIT_SIZE; i++) fprintf(log, "%6.0f ", debug[i]);
       fprintf(log, "\n");
 #endif
-
+#ifdef PRINT
       for (int t_i = 0; t_i < T_I; t_i++) {
         int t_each = t_e + t_i;
         for (int i = 0; i < N_ALL_P; i++) {
           h_spikep_buf[t_each * N_ALL_P + i] = spikep_buf[t_i * N_ALL_P + i];
         }
       }
+#endif
 
       // Wait data exchange
       //for (int i = 0; i < 16; i++) MPI_Wait(&request[i], &status_mpi);
@@ -562,14 +568,16 @@ int main (int argc, char *argv[]) {
       double elapsed_time = timer_elapsed();
       fprintf(stderr, "time: %f msec\n", elapsed_time);
 
+#ifdef PRINT
       for (int t = 0; t < N_PERIOD; t++) {
         for (int i = 0; i < N_ALL_P; i++)
           if (h_spikep_buf[t * N_ALL_P + i] != 0) fprintf(fgr_spk, "%d %d\n", t, i);
       }
+      fclose(fgr_spk);
+#endif
 #ifdef PROF
       PrintProfileData(context, queue, kernel_prof, nt);
 #endif
-      fclose(fgr_spk);
 #ifdef DEBUG
       fclose(log);
 #endif
