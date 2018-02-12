@@ -59,7 +59,7 @@ PZCPerformance GetPerformance(pzcl_context context, pzcl_command_queue queue, pz
 }
 
 void PrintProfileData(pzcl_context context, pzcl_command_queue queue, pzcl_kernel kernel, int nTrial) {
-  const double clock = 1000e6;
+  const double clock = 733e6;
   FILE* prof;
   char* fn = new char[256];
   sprintf(fn, "profile.trial%d.log", nTrial);
@@ -81,8 +81,8 @@ void PrintProfileData(pzcl_context context, pzcl_command_queue queue, pzcl_kerne
       default:             fprintf(prof, "%16s\t", "Undef"); break;
     }
     fprintf(prof, "%8d (%e sec)\t", perf_count, (perf_count != 0) ? sec : 0.0);
-    fprintf(prof, "%8d (%5.3f %%)\t", stall, (perf_count != 0) ? stall * 100.0 / perf_count: 0.0 );
-    fprintf(prof, "%8d (%5.3f %%)\n", wait , (perf_count != 0) ? wait * 100.0 / perf_count: 0.0 );
+    fprintf(prof, "%8d (%6.3f %%)\t", stall, (perf_count != 0) ? stall * 100.0 / perf_count: 0.0 );
+    fprintf(prof, "%8d (%6.3f %%)\n", wait , (perf_count != 0) ? wait * 100.0 / perf_count: 0.0 );
   }
   delete fn;
   fclose(prof);
