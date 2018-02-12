@@ -25,6 +25,17 @@ void Error(const char* message, ...) {
   exit(1);
 }
 
+typedef CL_API_ENTRY cl_int (CL_API_CALL * pfnPezyExtSetPerThreadStackSize)(pzcl_kernel kernel, size_t size);
+bool SetStackSize (pzcl_kernel kernel, unsigned int size) {
+  bool ret = false;
+  pfnPezyExtSetPerThreadStackSize PezyExtSetPerThreadStackSize
+    = (pfnPezyExtSetPerThreadStackSize)clGetExtensionFunctionAddress("pezy_set_per_thread_stack_size");
+  if (PezyExtSetPerThreadStackSize) {
+    ret = PezyExtSetPerThreadStackSize(kernel, size) == CL_SUCCESS;
+  }
+  return ret;
+}
+
 PZCPerformance GetPerformance(pzcl_context context, pzcl_command_queue queue, pzcl_kernel kernel, int index) {
   PZCPerformance perf;
   pzcl_int result = 0;
@@ -245,6 +256,9 @@ int main (int argc, char *argv[]) {
 
   pzcl_command_queue queue = pzclCreateCommandQueue(context, device[device_id], 0, &err);
   if (err) Error("pzclCreateCommandQueue: %d\n", err);
+
+  // Stackサイズを1KBに
+  SetStackSize (kernel, 1280);
 
   //
   // Data Setup

@@ -426,8 +426,10 @@ void pzc_kernel(unsigned int* seeds, unsigned short* lists,
     if (pid == 0 && tid == 0) { stc.Update(); }
 #endif
 
-    update_gr(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_inh, g_ahp, s_gr, lists + N_GO * N_GO, s_go, working_buf);
-    flush();
+    {
+      update_gr(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_inh, g_ahp, s_gr, lists + N_GO * N_GO, s_go, working_buf);
+      flush();
+    }
 
 #ifdef PROF
     if (pid == 0 && tid == 0) {
@@ -437,8 +439,10 @@ void pzc_kernel(unsigned int* seeds, unsigned short* lists,
     }
 #endif
 
-    calc_input_pkjgr(pid, tid, index, sum, g_ex, seeds, s_gr_rect, w, (float*)working_buf);
-    flush();
+    {
+      calc_input_pkjgr(pid, tid, index, sum, g_ex, seeds, s_gr_rect, w, (float*)working_buf);
+      flush();
+    }
 
 #ifdef PROF
     if (pid == 0 && tid == 0) {
@@ -448,8 +452,10 @@ void pzc_kernel(unsigned int* seeds, unsigned short* lists,
     }
 #endif
 
-    calc_input_stgr(pid, tid, index, sum, g_ex, seeds, s_gr_rect, (float*)working_buf);
-    flush();
+    {
+      calc_input_stgr(pid, tid, index, sum, g_ex, seeds, s_gr_rect, (float*)working_buf);
+      flush();
+    }
 
 #ifdef PROF
     if (pid == 0 && tid == 0) {
@@ -459,8 +465,10 @@ void pzc_kernel(unsigned int* seeds, unsigned short* lists,
     }
 #endif
 
-    update_go(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_ahp, s_go, lists, s_gr_rect, (float*)working_buf);
-    flush();
+    {
+      update_go(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_ahp, s_go, lists, s_gr_rect, (float*)working_buf);
+      flush();
+    }
 
 #ifdef PROF
     if (pid == 0 && tid == 0) {
@@ -470,8 +478,10 @@ void pzc_kernel(unsigned int* seeds, unsigned short* lists,
     }
 #endif
 
-    update_mol(pid, tid, index, t_i, t_e, seeds, u, g_ex, g_inh, g_ahp, s_mol, (float*)working_buf);
-    flush();
+    {
+      update_mol(pid, tid, index, t_i, t_e, seeds, u, g_ex, g_inh, g_ahp, s_mol, (float*)working_buf);
+      flush();
+    }
 
 #ifdef PROF
     if (pid == 0 && tid == 0) {
@@ -481,8 +491,10 @@ void pzc_kernel(unsigned int* seeds, unsigned short* lists,
     }
 #endif
 #ifdef PRINT
-    store_spikes(pid, tid, index, t_i, spikep_buf, s_gr, s_go, s_mol);
-    flush();
+    {
+      store_spikes(pid, tid, index, t_i, spikep_buf, s_gr, s_go, s_mol);
+      flush();
+    }
 #endif
   }
 
