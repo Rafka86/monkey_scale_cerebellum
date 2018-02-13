@@ -3,7 +3,13 @@
 
 #include "../param.h"
 
-#define OFFSET (MAX_TID)
+#define OFFSET  (MAX_TID)
+#define WBUFAD  (0x2800)
+#define UAD     (0x2820)
+#define GEXAD   (0x2838)
+#define GINHAD  (0x2850)
+#define GAHPAD  (0x2868)
+#define GRSPKAD (0x2880)
 
 PZCPerformance gPerf[MAX_PROF];
 void pzc_GetPerformance(PZCPerformance* out, int idx) {
@@ -38,37 +44,59 @@ static inline float genrand(unsigned int* seed) {
   return (float)(((*seed) >> 16) * (1.52587890625e-05f)); //(1.0f/65536)
 }
 
+static inline float* wbuf_float(int index) {
+  return ((float*)WBUFAD + index);
+}
+static inline unsigned char* wbuf_uchar(int index) {
+  return ((unsigned char*)WBUFAD + index);
+}
+static inline float* l_u(int index) {
+  return ((float*)UAD + index);
+}
+static inline float* l_g_ex(int index) {
+  return ((float*)GEXAD + index);
+}
+static inline float* l_g_inh(int index) {
+  return ((float*)GINHAD + index);
+}
+static inline float* l_g_ahp(int index) {
+  return ((float*)GAHPAD + index);
+}
+static inline unsigned long* l_gr_spk(int index) {
+  return ((unsigned long*)GRSPKAD + index);
+}
+
 static void update_gr(const int pid, const int tid, const int index, const int t_e, const int t_i,
                       unsigned int* seeds, float* u, float* g_ex, float* g_inh, float* g_ahp, unsigned long* s_gr,
-                      const unsigned short* list_grgo, const unsigned char* s_go, unsigned char* wbuf) {
+                      const unsigned short* list_grgo, const unsigned char* s_go) {
   auto wbuf_i = 7 - tid;
   auto count = 0;
-  auto inh_input = (float*)wbuf + 8;
+  auto inh_input = wbuf_float(2);
   auto mf_firing_rate = 0.03f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD));
   for (auto i = pid; i < N_S_GR; i += MAX_PID) {
     //calc input from go
     {
       auto gr_group_id = i >> 4;
-      auto wbuf_float = (float*)wbuf;
+      //auto wbuf_float = (float*)wbuf;
       auto seed = seeds[index];
 
       auto idx = list_grgo[gr_group_id * N_GO + tid];
       auto rnd = genrand(&seed);
-      wbuf_float[tid] = (1.0f              * (rnd < 0.25f)
-                        +DECAY_GABA1_GRGO  * (0.25f <= rnd && rnd < 0.5f)
-                        +DECAY_GABA1_GRGO2 * (0.5f <= rnd && rnd < 0.75f)
-                        +DECAY_GABA1_GRGO3 * (0.75f <= rnd)) * R_GABA1_GRGO * s_go[idx];
+      *wbuf_float(tid) = (1.0f              * (rnd < 0.25f)
+                         +DECAY_GABA1_GRGO  * (0.25f <= rnd && rnd < 0.5f)
+                         +DECAY_GABA1_GRGO2 * (0.5f <= rnd && rnd < 0.75f)
+                         +DECAY_GABA1_GRGO3 * (0.75f <= rnd)) * R_GABA1_GRGO * s_go[idx];
 
       sync_L1();
       if (tid == 0) {
-        *inh_input = wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7];
+        *inh_input = *wbuf_float(0) + *wbuf_float(1) + *wbuf_float(3) + *wbuf_float(4) + *wbuf_float(5) + *wbuf_float(6) + *wbuf_float(7);
         *inh_input *= GAMMA;
       } 
     }
 
     sync_L1();
     auto spk_block = s_gr[i];
-    wbuf[wbuf_i] = 0;
+    *wbuf_uchar(wbuf_i) = 0;
 
     for (auto j = 0; j < 8; j++) {
       auto spk = get_spike(spk_block, tid * 8 + j);
@@ -107,10 +135,10 @@ static void update_gr(const int pid, const int tid, const int index, const int t
       g_inh[target_neuron_id] = l_g_inh;
       g_ahp[target_neuron_id] = l_g_ahp;
       seeds[target_neuron_id] = seed;
-      wbuf[wbuf_i] |= (spk << j);
+      *wbuf_uchar(wbuf_i) |= (spk << j);
     }
     sync_L1();
-    if (tid == 0) s_gr[i] = *((unsigned long*)wbuf);
+    if (tid == 0) s_gr[i] = *((unsigned long*)wbuf_uchar(0));
     if (++count == 4) {
       flush_L2();
       count = 0;
@@ -122,12 +150,12 @@ static void update_gr(const int pid, const int tid, const int index, const int t
 
 static void update_go(const int pid, const int tid, const int index, const int t_e, const int t_i,
                       const unsigned int* seeds, float* u, float* g_ex, float* g_ahp, unsigned char* s_go,
-                      const unsigned short* list_gogr, const unsigned long* s_gr, float* wbuf) {
+                      const unsigned short* list_gogr, const unsigned long* s_gr) {
   auto seed = seeds[index];
   for (auto i = pid; i < N_GO; i += MAX_PID) {
     auto target_neuron_id = i + IDX_H_GO;
 
-    wbuf[tid] = 0.0f;
+    *wbuf_float(tid) = 0.0f;
     for (auto j = tid; j < N_GR_PER_GO; j++) {
       auto idx = list_gogr[i * N_GO + j];
       auto sp = &s_gr[idx * 16];
@@ -136,10 +164,10 @@ static void update_go(const int pid, const int tid, const int index, const int t
         spikes_gr += popl(sp[k]);
       for (auto k = 0; k < spikes_gr; k++) {
         auto rnd = genrand(&seed);
-        wbuf[tid] += (1.0f             * (rnd < 0.25f)
-                     +DECAY_AMPA_GOGR  * (0.25f <= rnd && rnd < 0.5f)
-                     +DECAY_AMPA_GOGR2 * (0.5f <= rnd && rnd < 0.75f)
-                     +DECAY_AMPA_GOGR3 * (0.75f <= rnd));
+        *wbuf_float(tid) += (1.0f             * (rnd < 0.25f)
+                            +DECAY_AMPA_GOGR  * (0.25f <= rnd && rnd < 0.5f)
+                            +DECAY_AMPA_GOGR2 * (0.5f <= rnd && rnd < 0.75f)
+                            +DECAY_AMPA_GOGR3 * (0.75f <= rnd));
       }
     }
     sync_L1();
@@ -151,7 +179,7 @@ static void update_go(const int pid, const int tid, const int index, const int t
 
       // update conductances
       l_g_ex *= DECAY_AMPA_GOGR;
-      l_g_ex += wbuf[0] + wbuf[1] + wbuf[2] + wbuf[3];
+      l_g_ex += *wbuf_float(0) + *wbuf_float(1) + *wbuf_float(2) + *wbuf_float(3);
       l_g_ahp = l_g_ahp * DECAY_AHP_GO * (!spk) + spk;
 
       // update v
@@ -176,18 +204,17 @@ static void update_go(const int pid, const int tid, const int index, const int t
 
 static void calc_input_pkjgr(const int pid, const int tid, const int index,
                              float* sum, float* g_ex,
-                             const unsigned int* seeds, const unsigned long* s_gr, const unsigned int* w,
-                             float* wbuf) {
+                             const unsigned int* seeds, const unsigned long* s_gr, const unsigned int* w) {
   auto seed = seeds[index];
   auto local_pid = pid & 255;
   auto pref_id = pid >> 8;
   auto count = 0;
   for (auto i = 0; i < 4; i++) {
     auto pkj_id = i * 8 + pref_id;
-    auto   x = local_pid & 31;
-    auto   y = local_pid >> 5;
-    auto  ay = y + pkj_id - 4 + Y_GO_4;
-    auto idx = x + (X_GO + X_GO_2) * ay;
+    auto x      = local_pid & 31;
+    auto y      = local_pid >> 5;
+    auto ay     = y + pkj_id - 4 + Y_GO_4;
+    auto idx    = x + (X_GO + X_GO_2) * ay;
     auto local_sum = 0.0f;
     auto sp = &s_gr[idx];
     auto w_base = pkj_id * N_W_GR + (idx & 0x1ff) * 256 + tid * 16;  // 256 = R_N2 / 4
@@ -213,22 +240,22 @@ static void calc_input_pkjgr(const int pid, const int tid, const int index,
       }
       local_sum += KAPPA_PKJPF * 0.0009766f * part_input * coef;
     }
-    wbuf[tid] = local_sum;
+    *wbuf_float(tid) = local_sum;
     sync_L1();
-    if (tid == 0) sum[pid] = wbuf[0] + wbuf[1] + wbuf[2] + wbuf[3] + wbuf[4] + wbuf[5] + wbuf[6] + wbuf[7];
+    if (tid == 0) sum[pid] = *wbuf_float(0) + *wbuf_float(1) + *wbuf_float(2) + *wbuf_float(3) + *wbuf_float(4) + *wbuf_float(5) + *wbuf_float(6) + *wbuf_float(7);
     flush_L2();
     if (local_pid < 16) {
       auto base = 256 * pref_id + 16 * local_pid;
-      wbuf[tid] = sum[tid + base] + sum[tid + OFFSET + base];
+      *wbuf_float(tid) = sum[tid + base] + sum[tid + OFFSET + base];
       sync_L1();
-      if (tid == 0) sum[pid] = wbuf[0] + wbuf[1] + wbuf[2] + wbuf[3] + wbuf[4] + wbuf[5] + wbuf[6] + wbuf[7];
+      if (tid == 0) sum[pid] = *wbuf_float(0) + *wbuf_float(1) + *wbuf_float(2) + *wbuf_float(3) + *wbuf_float(4) + *wbuf_float(5) + *wbuf_float(6) + *wbuf_float(7);
     }
     flush_L1();
     if (local_pid == 0) {
       auto base = 256 * pref_id;
-      wbuf[tid] = sum[tid + base] + sum[tid + OFFSET + base];
+      *wbuf_float(tid) = sum[tid + base] + sum[tid + OFFSET + base];
       sync_L1();
-      if (tid == 0) g_ex[IDX_H_PKJ + pkj_id] = wbuf[0] + wbuf[1] + wbuf[2] + wbuf[3] + wbuf[4] + wbuf[5] + wbuf[6] + wbuf[7];
+      if (tid == 0) g_ex[IDX_H_PKJ + pkj_id] = *wbuf_float(0) + *wbuf_float(1) + *wbuf_float(2) + *wbuf_float(3) + *wbuf_float(4) + *wbuf_float(5) + *wbuf_float(6) + *wbuf_float(7);
     }
     if (++count != 2) flush_L1();
     else flush_L2();
@@ -237,8 +264,7 @@ static void calc_input_pkjgr(const int pid, const int tid, const int index,
 
 static void calc_input_stgr(const int pid, const int tid, const int index,
                            float* sum, float* g_ex,
-                           const unsigned int* seeds, const unsigned long* s_gr,
-                           float* wbuf) {
+                           const unsigned int* seeds, const unsigned long* s_gr) {
   auto seed = seeds[index];
   auto local_pid = pid & 255;
   auto pref_id = pid >> 8;
@@ -250,22 +276,22 @@ static void calc_input_stgr(const int pid, const int tid, const int index,
     auto  ay = y + st_id - 4 + Y_GO_4;
     auto idx = x + (X_GO + X_GO_2) * ay;
     auto local_sum = KAPPA_STPF * popl(s_gr[idx]);
-    wbuf[tid] = local_sum;
+    *wbuf_float(tid) = local_sum;
     sync_L1();
-    if (tid == 0) sum[pid] = wbuf[0] + wbuf[1] + wbuf[2] + wbuf[3] + wbuf[4] + wbuf[5] + wbuf[6] + wbuf[7];
+    if (tid == 0) sum[pid] = *wbuf_float(0) + *wbuf_float(1) + *wbuf_float(2) + *wbuf_float(3) + *wbuf_float(4) + *wbuf_float(5) + *wbuf_float(6) + *wbuf_float(7);
     flush_L2();
     if (local_pid < 16) {
       auto base = 256 * pref_id + 16 * local_pid;
-      wbuf[tid] = sum[tid + base] + sum[tid + OFFSET + base];
+      *wbuf_float(tid) = sum[tid + base] + sum[tid + OFFSET + base];
       sync_L1();
-      if (tid == 0) sum[pid] = wbuf[0] + wbuf[1] + wbuf[2] + wbuf[3] + wbuf[4] + wbuf[5] + wbuf[6] + wbuf[7];
+      if (tid == 0) sum[pid] = *wbuf_float(0) + *wbuf_float(1) + *wbuf_float(2) + *wbuf_float(3) + *wbuf_float(4) + *wbuf_float(5) + *wbuf_float(6) + *wbuf_float(7);
     }
     flush_L1();
     if (local_pid == 0) {
       auto base = 256 * pref_id;
-      wbuf[tid] = sum[tid + base] + sum[tid + OFFSET + base];
+      *wbuf_float(tid) = sum[tid + base] + sum[tid + OFFSET + base];
       sync_L1();
-      if (tid == 0) g_ex[IDX_H_ST + st_id] = wbuf[0] + wbuf[1] + wbuf[2] + wbuf[3] + wbuf[4] + wbuf[5] + wbuf[6] + wbuf[7];
+      if (tid == 0) g_ex[IDX_H_ST + st_id] = *wbuf_float(0) + *wbuf_float(1) + *wbuf_float(2) + *wbuf_float(3) + *wbuf_float(4) + *wbuf_float(5) + *wbuf_float(6) + *wbuf_float(7);
     }
     if (++count != 2) flush_L1();
     else flush_L2();
@@ -274,7 +300,7 @@ static void calc_input_stgr(const int pid, const int tid, const int index,
 
 static void update_mol(const int pid, const int tid, const int index, const int t_i, const int t_e,
                        const unsigned int* seeds, float* u, float* g_ex, float* g_inh, float* g_ahp,
-                       unsigned char* s_mol, float* wbuf) {
+                       unsigned char* s_mol) {
   if (pid < N_MOL) {
     auto target_neuron_id = pid + IDX_H_MOL; 
 
@@ -414,8 +440,6 @@ void pzc_kernel(unsigned int* seeds, unsigned short* lists,
   auto pid = get_pid();
   auto index = pid * MAX_TID + tid;
 
-  unsigned char* working_buf = (unsigned char*)(0x4000);
-
 #ifdef PROF
   PZCPerformance stc_all, stc, etc;
   if (pid == 0 && tid == 0) { stc_all.Update(); }
@@ -427,7 +451,7 @@ void pzc_kernel(unsigned int* seeds, unsigned short* lists,
 #endif
 
     {
-      update_gr(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_inh, g_ahp, s_gr, lists + N_GO * N_GO, s_go, working_buf);
+      update_gr(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_inh, g_ahp, s_gr, lists + N_GO * N_GO, s_go);
       flush();
     }
 
@@ -440,7 +464,7 @@ void pzc_kernel(unsigned int* seeds, unsigned short* lists,
 #endif
 
     {
-      calc_input_pkjgr(pid, tid, index, sum, g_ex, seeds, s_gr_rect, w, (float*)working_buf);
+      calc_input_pkjgr(pid, tid, index, sum, g_ex, seeds, s_gr_rect, w);
       flush();
     }
 
@@ -453,7 +477,7 @@ void pzc_kernel(unsigned int* seeds, unsigned short* lists,
 #endif
 
     {
-      calc_input_stgr(pid, tid, index, sum, g_ex, seeds, s_gr_rect, (float*)working_buf);
+      calc_input_stgr(pid, tid, index, sum, g_ex, seeds, s_gr_rect);
       flush();
     }
 
@@ -466,7 +490,7 @@ void pzc_kernel(unsigned int* seeds, unsigned short* lists,
 #endif
 
     {
-      update_go(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_ahp, s_go, lists, s_gr_rect, (float*)working_buf);
+      update_go(pid, tid, index, t_e, t_i, seeds, u, g_ex, g_ahp, s_go, lists, s_gr_rect);
       flush();
     }
 
@@ -479,7 +503,7 @@ void pzc_kernel(unsigned int* seeds, unsigned short* lists,
 #endif
 
     {
-      update_mol(pid, tid, index, t_i, t_e, seeds, u, g_ex, g_inh, g_ahp, s_mol, (float*)working_buf);
+      update_mol(pid, tid, index, t_i, t_e, seeds, u, g_ex, g_inh, g_ahp, s_mol);
       flush();
     }
 
