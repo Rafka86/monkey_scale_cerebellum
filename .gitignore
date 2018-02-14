@@ -4,3 +4,4 @@ main
 kernel.sc2/
 *.spk.*.*
 log.*.*
+*.bak

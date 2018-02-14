@@ -14,6 +14,8 @@
 #define MAX_BINARY_SIZE (0x1000000)
 #define KERNEL_FILE "./kernel.sc2/kernel.sc2.pz"
 #define KERNEL_FUNC "kernel"
+#define KERNEL_INIT "init_local_memory"
+#define KERNEL_FIN  "fin_local_memory"
 #define KERNEL_PROF "GetPerformance"
 
 void Error(const char* message, ...) {
@@ -249,6 +251,12 @@ int main (int argc, char *argv[]) {
   pzcl_kernel kernel = pzclCreateKernel(program, KERNEL_FUNC, &err);
   if (err) Error("pzclCreateKernel of %s: %d\n", KERNEL_FUNC, err);
 
+  pzcl_kernel kernel_init = pzclCreateKernel(program, KERNEL_INIT, &err);
+  if (err) Error("pzclCreateKernel of %s: %d\n", KERNEL_INIT, err);
+
+  pzcl_kernel kernel_fin  = pzclCreateKernel(program, KERNEL_FIN, &err);
+  if (err) Error("pzclCreateKernel of %s: %d\n", KERNEL_FIN, err);
+
 #ifdef PROF
   pzcl_kernel kernel_prof = pzclCreateKernel(program, KERNEL_PROF, &err);
   if (err) Error("pzclCreateKernel of %s: %d\n", KERNEL_PROF, err);
@@ -257,8 +265,11 @@ int main (int argc, char *argv[]) {
   pzcl_command_queue queue = pzclCreateCommandQueue(context, device[device_id], 0, &err);
   if (err) Error("pzclCreateCommandQueue: %d\n", err);
 
-  // Stackサイズを1KBに
-  SetStackSize (kernel, 1280);
+  // Stackサイズを1.2KBに
+  SetStackSize (kernel,      1280);
+  SetStackSize (kernel_init, 1280);
+  SetStackSize (kernel_fin,  1280);
+  SetStackSize (kernel_prof, 1280);
 
   //
   // Data Setup
@@ -298,12 +309,12 @@ int main (int argc, char *argv[]) {
   if (err) Error("pzclEnqueueWriteBuffer:%d s_mol\n", err);
 
   srand(23L);
-  unsigned int* seeds = (unsigned int*)malloc(sizeof(unsigned int) * N_GR);
+  unsigned int* seeds = (unsigned int*)malloc(sizeof(unsigned int) * WORK_UNIT_SIZE);
   if (seeds == NULL) Error("failed malloc seeds\n");
-  for (int i = 0; i < N_GR; i++) seeds[i] = rand();
-  pzcl_mem dev_seeds = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(unsigned int) * N_GR, NULL, &err);
+  for (int i = 0; i < WORK_UNIT_SIZE; i++) seeds[i] = rand();
+  pzcl_mem dev_seeds = pzclCreateBuffer(context, PZCL_MEM_READ_WRITE, sizeof(unsigned int) * WORK_UNIT_SIZE, NULL, &err);
   if (err) Error("pzclCreateBuffer:%d dev_seeds\n", err);
-  err = pzclEnqueueWriteBuffer(queue, dev_seeds, PZCL_TRUE, 0, sizeof(unsigned int) * N_GR, seeds, 0, NULL, NULL);
+  err = pzclEnqueueWriteBuffer(queue, dev_seeds, PZCL_TRUE, 0, sizeof(unsigned int) * WORK_UNIT_SIZE, seeds, 0, NULL, NULL);
   if (err) Error("pzclEnqueueWriteBuffer:%d seeds\n", err);
 
   unsigned short* lists = (unsigned short*)malloc(sizeof(unsigned short) * N_GO * N_GO * 2);
@@ -388,10 +399,23 @@ int main (int argc, char *argv[]) {
   err = pzclEnqueueWriteBuffer(queue, dev_w, PZCL_TRUE, 0, sizeof(unsigned int) * (N_GR / 4) * N_PKJ, w, 0, NULL, NULL);
   if (err) Error("pzclEnqueueWriteBuffer:%d w\n", err);
 
+  //
+  // Main Loop
+  //
+  
   char* h_spikep_buf = (char*)malloc(sizeof(char) * N_ALL_P * N_PERIOD);
 
   size_t work_unit_size = WORK_UNIT_SIZE;
   pzcl_event event = NULL;
+
+  pzclSetKernelArg(kernel_init, 0, sizeof(pzcl_mem), &dev_seeds);
+  err = pzclEnqueueNDRangeKernel(queue, kernel_init, 1, NULL, &work_unit_size, NULL, 0, NULL, &event);
+  if (err) Error("pzclEnqueueNDRangeKernel: %d\n", err);
+  if (event) {
+    err = pzclWaitForEvents(1, &event);
+    if (err != PZCL_SUCCESS)
+      Error("Err: kernel %d in begin. Rank %d on %s.\n", err, world_rank, processor_name);
+  }
 
   MPI_Status status_mpi;
   MPI_Request request[16];
@@ -426,20 +450,19 @@ int main (int argc, char *argv[]) {
       fprintf(stderr, "== %2d ==\n", nt);
     }
 
-    pzclSetKernelArg(kernel,  0, sizeof(pzcl_mem), &dev_seeds);
-    pzclSetKernelArg(kernel,  1, sizeof(pzcl_mem), &dev_lists);
-    pzclSetKernelArg(kernel,  2, sizeof(pzcl_mem), &dev_s_gr);
-    pzclSetKernelArg(kernel,  3, sizeof(pzcl_mem), &dev_s_gr_rect);
-    pzclSetKernelArg(kernel,  4, sizeof(pzcl_mem), &dev_s_go);
-    pzclSetKernelArg(kernel,  5, sizeof(pzcl_mem), &dev_s_mol);
-    pzclSetKernelArg(kernel,  6, sizeof(pzcl_mem), &dev_u);
-    pzclSetKernelArg(kernel,  7, sizeof(pzcl_mem), &dev_g_ex);
-    pzclSetKernelArg(kernel,  8, sizeof(pzcl_mem), &dev_g_inh);
-    pzclSetKernelArg(kernel,  9, sizeof(pzcl_mem), &dev_g_ahp);
-    pzclSetKernelArg(kernel, 10, sizeof(pzcl_mem), &dev_sum);
-    pzclSetKernelArg(kernel, 11, sizeof(pzcl_mem), &dev_w);
-    pzclSetKernelArg(kernel, 12, sizeof(pzcl_mem), &dev_spikep_buf);
-    pzclSetKernelArg(kernel, 13, sizeof(pzcl_mem), &dev_debug);
+    pzclSetKernelArg(kernel,  0, sizeof(pzcl_mem), &dev_lists);
+    pzclSetKernelArg(kernel,  1, sizeof(pzcl_mem), &dev_s_gr);
+    pzclSetKernelArg(kernel,  2, sizeof(pzcl_mem), &dev_s_gr_rect);
+    pzclSetKernelArg(kernel,  3, sizeof(pzcl_mem), &dev_s_go);
+    pzclSetKernelArg(kernel,  4, sizeof(pzcl_mem), &dev_s_mol);
+    pzclSetKernelArg(kernel,  5, sizeof(pzcl_mem), &dev_u);
+    pzclSetKernelArg(kernel,  6, sizeof(pzcl_mem), &dev_g_ex);
+    pzclSetKernelArg(kernel,  7, sizeof(pzcl_mem), &dev_g_inh);
+    pzclSetKernelArg(kernel,  8, sizeof(pzcl_mem), &dev_g_ahp);
+    pzclSetKernelArg(kernel,  9, sizeof(pzcl_mem), &dev_sum);
+    pzclSetKernelArg(kernel, 10, sizeof(pzcl_mem), &dev_w);
+    pzclSetKernelArg(kernel, 11, sizeof(pzcl_mem), &dev_spikep_buf);
+    pzclSetKernelArg(kernel, 12, sizeof(pzcl_mem), &dev_debug);
 
     if (world_rank == 0) timer_start();
 
@@ -447,7 +470,7 @@ int main (int argc, char *argv[]) {
     for (int t_e = 0; t_e < N_PERIOD; t_e += T_I) {
       count++;
 
-      pzclSetKernelArg(kernel, 14, sizeof(int), &t_e);
+      pzclSetKernelArg(kernel, 13, sizeof(int), &t_e);
 
       // Gr spikes are exchaged
       //for (int rb = 0; rb < 2; rb++) {
@@ -598,6 +621,18 @@ int main (int argc, char *argv[]) {
     }
   }
 
+  pzclSetKernelArg(kernel_fin, 0, sizeof(pzcl_mem), &dev_debug);
+  err = pzclEnqueueNDRangeKernel(queue, kernel_fin, 1, NULL, &work_unit_size, NULL, 0, NULL, &event);
+  if (err) Error("pzclEnqueueNDRangeKernel: %d\n", err);
+  err = pzclEnqueueReadBuffer(queue, dev_debug, PZCL_TRUE, 0, sizeof(float) * WORK_UNIT_SIZE, debug, 0, NULL, NULL);
+  if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
+#ifdef DEBUG
+  if (world_rank == 0) {
+    for (int i = 0; i < WORK_UNIT_SIZE; i++)
+      printf("%5d %f\n", i, debug[i]);
+  }
+#endif
+
   // Release memory objects
   free(seeds);
   free(lists);
@@ -632,6 +667,9 @@ int main (int argc, char *argv[]) {
   pzclReleaseMemObject(dev_debug);
   pzclReleaseCommandQueue(queue);
   pzclReleaseKernel(kernel);
+  pzclReleaseKernel(kernel_init);
+  pzclReleaseKernel(kernel_fin);
+  pzclReleaseKernel(kernel_prof);
   pzclReleaseProgram(program);
   pzclReleaseContext(context);
 

@@ -63,7 +63,7 @@
 #define GBAR_AHP_GO  (20.0f) //4.2nS
 #define DECAY_AHP_GO (0.81873f) //exp(-(float)DT/tau_ahp_go);
 #define E_AHP_GO     (-72.7f)
-#define I_EX_GO      (0.0f)
+#define I_EX_GO      (3.0f)
 
 #define N_GR_PER_GO      (4)
 #define DECAY_AMPA_GOGR  (0.51342f) //exp(-(float)DT/tau_ampa_gogr);
