@@ -25,7 +25,7 @@
 #define l_g_ahp    ((float*)GAHPAD)
 #define l_spk      ((unsigned char*)SPKAD)
 #define tag        ((unsigned char*)TAGAD)
-#define l_gr_spk   ((unsigned long*)GRSPKAD)
+#define l_s_gr     ((unsigned long*)GRSPKAD)
 
 enum MolecularTag {
   MTAG_NONE,
@@ -82,28 +82,32 @@ void pzc_init_local_memory(const unsigned int* seeds) {
   }
   seed[tid] = seeds[idx];
   for (auto i = tid; i < 64; i += OFFSET)
-    l_gr_spk[i] = 0UL;
+    l_s_gr[i] = 0UL;
 
   auto pref_id  = pid >> 8;
   auto pid_pref = pid & 255;
   if (tid == 0) {
     tag[0] = MTAG_NONE;
     tag[1] = 0;
-  }
-  if (pref_id < 7) {
-    auto mol_nid = pid_pref * 7 + pref_id;
-    if (mol_nid < N_PKJ) {
-      tag[0] = MTAG_PKJ;
-      tag[1] = mol_nid;
-    } else if (mol_nid < N_PKJ + N_ST) {
-      tag[0] = MTAG_ST;
-      tag[1] = mol_nid;
-    } else if (mol_nid < N_PKJ + N_ST + N_VN) {
-      tag[0] = MTAG_VN;
-      tag[1] = mol_nid;
-    } else if (mol_nid < N_PKJ + N_ST + N_VN + N_IO) {
-      tag[0] = MTAG_IO;
-      tag[1] = mol_nid;
+    if (pref_id < 7) {
+      auto mol_nid = pid_pref * 7 + pref_id;
+      if (mol_nid < N_PKJ) {
+        tag[0] = MTAG_PKJ;
+        tag[1] = mol_nid;
+      } else {
+        mol_nid = (pid_pref - 5) * 7 + pref_id;
+        if (mol_nid < 0) return ;
+        if (mol_nid < N_ST) {
+          tag[0] = MTAG_ST;
+          tag[1] = mol_nid + N_PKJ;
+        } else if (mol_nid < N_ST + N_VN) {
+          tag[0] = MTAG_VN;
+          tag[1] = mol_nid + N_PKJ;
+        } else if (mol_nid < N_ST + N_VN + N_IO) {
+          tag[0] = MTAG_IO;
+          tag[1] = mol_nid + N_PKJ;
+        }
+      }
     }
   }
 
@@ -116,6 +120,7 @@ void pzc_fin_local_memory(float* debug) {
   auto idx = pid * MAX_TID + tid;
   
   if (tid < 2) debug[idx] = tag[tid];
+  else debug[idx] = l_s_gr[tid];
 
   flush();
   return;
@@ -480,11 +485,27 @@ static void store_spikes(const int pid, const int tid, const int index, const in
   flush_L1();
 }
 
-static void load_gr_spk(const int pid, const int tid, const int index, const unsigned long* s_gr_rect, const unsigned long* s_gr) {
-
+static void load_gr_spk_sub(const int tid, const int x, const int y, const bool use_rect, const int offset,
+                            const unsigned long* s_gr_rect, const unsigned long* s_gr) {
+  auto cid = use_rect ? (y + Y_GO_4) * (X_GO + X_GO_2) + (x + X_GO_4) : y * X_GO + x; // cluster id
+  l_s_gr[offset * 16 + tid         ] = use_rect ? s_gr_rect[cid * 16 + tid         ] : s_gr[cid * 16 + tid         ];
+  l_s_gr[offset * 16 + tid + OFFSET] = use_rect ? s_gr_rect[cid * 16 + tid + OFFSET] : s_gr[cid * 16 + tid + OFFSET];
 }
-static void load_gr_spk(const int pid, const int tid, const int index, const unsigned long* s_gr) {
-  
+
+static void load_gr_spk(const int pid, const int tid, const unsigned long* s_gr_rect, const unsigned long* s_gr) {
+  auto pref_id  = pid >> 8;
+  auto pid_pref = pid & 255;
+  auto x        = pid_pref & 31;
+  auto y        = pid_pref >> 5;
+  if (pref_id == 7) return;
+
+  for (auto i = 0; i < 5; i++) {
+    auto pkj_id = i * 7 + pref_id;
+    if (pkj_id >= N_PKJ) return;
+
+    auto ay     = y + pkj_id - 4;
+    load_gr_spk_sub(tid, x, ay, ay < 0, 0, s_gr_rect, s_gr);
+  }
 }
 
 void pzc_kernel(unsigned short* lists,
@@ -514,6 +535,18 @@ void pzc_kernel(unsigned short* lists,
     if (pid == 0 && tid == 0) {
       etc.Update();
       gPerf[UPDATE_GR] = etc - stc;
+      stc.Update();
+    }
+#endif
+
+    {
+      load_gr_spk(pid, tid, s_gr_rect, s_gr);
+    }
+
+#ifdef PROF
+    if (pid == 0 && tid == 0) {
+      etc.Update();
+      gPerf[LOAD_GR_SPK] = etc - stc;
       stc.Update();
     }
 #endif
