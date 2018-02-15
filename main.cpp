@@ -434,6 +434,15 @@ int main (int argc, char *argv[]) {
   rank_list[6] = ( col                   ) + size * ((row + 1       ) % size); //Lower
   rank_list[7] = ((col + 1       ) % size) + size * ((row + 1       ) % size); //LowerRight
 
+#ifdef DEBUG
+  FILE* local_fin;
+  if (world_rank == 0) {
+    char fn[256];
+    sprintf(fn, "local_fin.log");
+    local_fin = fopen(fn, "w");
+  }
+#endif
+
   for (int nt = 0; nt < N_TRIALS; nt++) {
     FILE* fgr_spk;
     FILE* log;
@@ -545,32 +554,6 @@ int main (int argc, char *argv[]) {
 #ifdef PRINT
       err = pzclEnqueueReadBuffer(queue, dev_spikep_buf, PZCL_TRUE, 0, sizeof(char) * N_ALL_P * T_I, spikep_buf, 0, NULL, NULL);
       if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-#endif
-#ifdef DEBUG
-      fprintf(log, "t:%d\t", t_e + T_I);
-      err = pzclEnqueueReadBuffer(queue, dev_u, PZCL_TRUE, 0, sizeof(float) * N_ALL, u, 0, NULL, NULL);
-      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      err = pzclEnqueueReadBuffer(queue, dev_s_mol, PZCL_TRUE, 0, sizeof(unsigned char) * N_MOL, s_mol, 0, NULL, NULL);
-      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      fprintf(log, "v:%f\tspk:%d %d %d %d\t", u[IDX_H_PKJ],
-              spikep_buf[T_GO_P], spikep_buf[N_ALL_P + T_GO_P], spikep_buf[N_ALL_P * 2 + T_GO_P], spikep_buf[N_ALL_P * 3 + T_GO_P]);
-      fprintf(log, "s_mol:%d\t", s_mol[0]);
-      err = pzclEnqueueReadBuffer(queue, dev_g_ex, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_ex, 0, NULL, NULL);
-      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      fprintf(log, "g_ex:%f\t", g_ex[IDX_H_IO]);
-      err = pzclEnqueueReadBuffer(queue, dev_g_inh, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_inh, 0, NULL, NULL);
-      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      fprintf(log, "g_inh:%f\n", g_inh[0]);
-      err = pzclEnqueueReadBuffer(queue, dev_g_ahp, PZCL_TRUE, 0, sizeof(float) * N_ALL, g_ahp, 0, NULL, NULL);
-      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      fprintf(log, "g_ahp:%f\t", g_ahp[IDX_H_PKJ]);
-      err = pzclEnqueueReadBuffer(queue, dev_debug, PZCL_TRUE, 0, sizeof(float) * WORK_UNIT_SIZE, debug, 0, NULL, NULL);
-      if (err) Error("pzclEnqueueReadBuffer: %d\n", err);
-      fprintf(log, "debug:");
-      for (int i = 0; i < WORK_UNIT_SIZE; i++) fprintf(log, "%6.0f ", debug[i]);
-      fprintf(log, "\n");
-#endif
-#ifdef PRINT
       for (int t_i = 0; t_i < T_I; t_i++) {
         int t_each = t_e + t_i;
         for (int i = 0; i < N_ALL_P; i++) {
@@ -629,7 +612,8 @@ int main (int argc, char *argv[]) {
 #ifdef DEBUG
   if (world_rank == 0) {
     for (int i = 0; i < WORK_UNIT_SIZE; i++)
-      printf("%5d %f\n", i, debug[i]);
+      fprintf(local_fin, "%5d %f\n", i, debug[i]);
+    fclose(local_fin);
   }
 #endif
 

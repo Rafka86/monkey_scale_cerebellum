@@ -12,6 +12,7 @@
 #define GINHAD  (0x2870)
 #define GAHPAD  (0x2888)
 #define SPKAD   (0x28A0)
+#define TAGAD   (0x28A6)
 #define GRSPKAD (0x28A8)
 
 #define wbuf_float ((float*)WBUFAD)
@@ -23,7 +24,16 @@
 #define l_g_inh    ((float*)GINHAD)
 #define l_g_ahp    ((float*)GAHPAD)
 #define l_spk      ((unsigned char*)SPKAD)
+#define tag        ((unsigned char*)TAGAD)
 #define l_gr_spk   ((unsigned long*)GRSPKAD)
+
+enum MolecularTag {
+  MTAG_NONE,
+  MTAG_PKJ,
+  MTAG_ST,
+  MTAG_VN,
+  MTAG_IO
+};
 
 PZCPerformance gPerf[MAX_PROF];
 void pzc_GetPerformance(PZCPerformance* out, int idx) {
@@ -68,11 +78,34 @@ void pzc_init_local_memory(const unsigned int* seeds) {
     l_g_ex[tid]  = 0.0f;
     l_g_inh[tid] = 0.0f;
     l_g_ahp[tid] = 0.0f;
+    l_spk[tid] = 0;
   }
   seed[tid] = seeds[idx];
-  l_spk[tid] = 0;
-  for (auto i = tid; tid < 256; tid += OFFSET)
-    l_gr_spk[i] = 0;
+  for (auto i = tid; i < 64; i += OFFSET)
+    l_gr_spk[i] = 0UL;
+
+  auto pref_id  = pid >> 8;
+  auto pid_pref = pid & 255;
+  if (tid == 0) {
+    tag[0] = MTAG_NONE;
+    tag[1] = 0;
+  }
+  if (pref_id < 7) {
+    auto mol_nid = pid_pref * 7 + pref_id;
+    if (mol_nid < N_PKJ) {
+      tag[0] = MTAG_PKJ;
+      tag[1] = mol_nid;
+    } else if (mol_nid < N_PKJ + N_ST) {
+      tag[0] = MTAG_ST;
+      tag[1] = mol_nid;
+    } else if (mol_nid < N_PKJ + N_ST + N_VN) {
+      tag[0] = MTAG_VN;
+      tag[1] = mol_nid;
+    } else if (mol_nid < N_PKJ + N_ST + N_VN + N_IO) {
+      tag[0] = MTAG_IO;
+      tag[1] = mol_nid;
+    }
+  }
 
   return;
 }
@@ -81,8 +114,9 @@ void pzc_fin_local_memory(float* debug) {
   auto pid = get_pid();
   auto tid = get_tid();
   auto idx = pid * MAX_TID + tid;
-  if (tid < LENGTH) debug[idx] = l_u[tid];
   
+  if (tid < 2) debug[idx] = tag[tid];
+
   flush();
   return;
 }
@@ -316,84 +350,84 @@ static void calc_input_stgr(const int pid, const int tid, const int index,
 static void update_mol(const int pid, const int tid, const int index, const int t_i, const int t_e,
                        float* u, float* g_ex, float* g_inh, float* g_ahp,
                        unsigned char* s_mol) {
-  if (pid < N_MOL) {
-    auto target_neuron_id = pid + IDX_H_MOL; 
+  if (tag[0] != MTAG_NONE) {
+    auto nid = tag[1] + IDX_H_MOL;  // tag[1] is set neuron id in molecular
 
     if (tid == 0) {
-      auto spk      = s_mol[target_neuron_id - IDX_H_MOL];
-      auto ll_u     = u[target_neuron_id];
-      auto ll_g_ex  = g_ex[target_neuron_id];
-      auto ll_g_inh = g_inh[target_neuron_id];
-      auto ll_g_ahp = g_ahp[target_neuron_id];
+      auto spk      = s_mol[tag[1]];
+      auto ll_u     = u[nid];
+      auto ll_g_ex  = g_ex[nid];
+      auto ll_g_inh = g_inh[nid];
+      auto ll_g_ahp = g_ahp[nid];
 
       // Load const params
-      auto inv_c = (PKJ(target_neuron_id) * (INV_C_PKJ)
-                   + ST(target_neuron_id) * (INV_C_ST)
-                   + VN(target_neuron_id) * (INV_C_VN)
-                   + IO(target_neuron_id) * (INV_C_IO));
-      auto gbar_leak = (PKJ(target_neuron_id) * (GBAR_LEAK_PKJ)
-                       + ST(target_neuron_id) * (GBAR_LEAK_ST)
-                       + VN(target_neuron_id) * (GBAR_LEAK_VN)
-                       + IO(target_neuron_id) * (GBAR_LEAK_IO));
-      auto e_leak = (PKJ(target_neuron_id) * (E_LEAK_PKJ)
-                    + ST(target_neuron_id) * (E_LEAK_ST)
-                    + VN(target_neuron_id) * (E_LEAK_VN)
-                    + IO(target_neuron_id) * (E_LEAK_IO));
-      auto gbar_ex = ( 8.0f * PKJ(target_neuron_id) * (GBAR_EX_PKJ)
-                     +10.0f *  ST(target_neuron_id) * (GBAR_EX_ST)
-                     + 5.0f *  VN(target_neuron_id) * (GBAR_EX_VN)
-                     +         IO(target_neuron_id) * (GBAR_EX_IO));
-      auto e_ex = (PKJ(target_neuron_id) * (E_EX_PKJ)
-                  + ST(target_neuron_id) * (E_EX_ST)
-                  + VN(target_neuron_id) * (E_EX_VN)
-                  + IO(target_neuron_id) * (E_EX_IO));
-      auto decay_ex = (PKJ(target_neuron_id) * (DECAY_AMPA_PKJPF)
-                      + ST(target_neuron_id) * (DECAY_AMPA_STPF)
-                      + VN(target_neuron_id) * (DECAY_AMPA_VNMF)
-                      + IO(target_neuron_id) * (DECAY_AMPA_IO));
-      auto gbar_inh = ( 0.8f * PKJ(target_neuron_id) * (GBAR_INH_PKJ)
-                      +         ST(target_neuron_id) * (0.0f)
-                      +0.05f *  VN(target_neuron_id) * (GBAR_INH_VN)
-                      +         IO(target_neuron_id) * (GBAR_INH_IO));
-      auto e_inh = (PKJ(target_neuron_id) * (E_INH_PKJ)
-                   + ST(target_neuron_id) * (0.0f)
-                   + VN(target_neuron_id) * (E_INH_VN)
-                   + IO(target_neuron_id) * (E_INH_IO));
-      auto decay_inh = (PKJ(target_neuron_id) * (DECAY_GABA_PKJST)
-                       + ST(target_neuron_id) * (0.0f)
-                       + VN(target_neuron_id) * (DECAY_GABA_VNPKJ)
-                       + IO(target_neuron_id) * (0.0f));
-      auto th = (PKJ(target_neuron_id) * (TH_PKJ)
-                + ST(target_neuron_id) * (TH_ST)
-                + VN(target_neuron_id) * (TH_VN)
-                + IO(target_neuron_id) * (TH_IO));
-      auto gbar_ahp = (PKJ(target_neuron_id) * (GBAR_AHP_PKJ)
-                      + ST(target_neuron_id) * (GBAR_AHP_ST)
-                      + VN(target_neuron_id) * (GBAR_AHP_VN)
-                      + IO(target_neuron_id) * (GBAR_AHP_IO));
-      auto e_ahp = (PKJ(target_neuron_id) * (E_AHP_PKJ)
-                   + ST(target_neuron_id) * (E_AHP_ST)
-                   + VN(target_neuron_id) * (E_AHP_VN)
-                   + IO(target_neuron_id) * (E_AHP_IO));
-      auto decay_ahp = (PKJ(target_neuron_id) * (DECAY_AHP_PKJ)
-                       + ST(target_neuron_id) * (DECAY_AHP_ST)
-                       + VN(target_neuron_id) * (DECAY_AHP_VN)
-                       + IO(target_neuron_id) * (DECAY_AHP_IO));
-      auto i_ex = (PKJ(target_neuron_id) * (I_EX_PKJ)
-                  + ST(target_neuron_id) * (I_EX_ST)
-                  + VN(target_neuron_id) * (I_EX_VN)
-                  + IO(target_neuron_id) * (I_EX_IO));
+      auto inv_c = (PKJ(nid) * (INV_C_PKJ)
+                   + ST(nid) * (INV_C_ST)
+                   + VN(nid) * (INV_C_VN)
+                   + IO(nid) * (INV_C_IO));
+      auto gbar_leak = (PKJ(nid) * (GBAR_LEAK_PKJ)
+                       + ST(nid) * (GBAR_LEAK_ST)
+                       + VN(nid) * (GBAR_LEAK_VN)
+                       + IO(nid) * (GBAR_LEAK_IO));
+      auto e_leak = (PKJ(nid) * (E_LEAK_PKJ)
+                    + ST(nid) * (E_LEAK_ST)
+                    + VN(nid) * (E_LEAK_VN)
+                    + IO(nid) * (E_LEAK_IO));
+      auto gbar_ex = ( 8.0f * PKJ(nid) * (GBAR_EX_PKJ)
+                     +10.0f *  ST(nid) * (GBAR_EX_ST)
+                     + 5.0f *  VN(nid) * (GBAR_EX_VN)
+                     +         IO(nid) * (GBAR_EX_IO));
+      auto e_ex = (PKJ(nid) * (E_EX_PKJ)
+                  + ST(nid) * (E_EX_ST)
+                  + VN(nid) * (E_EX_VN)
+                  + IO(nid) * (E_EX_IO));
+      auto decay_ex = (PKJ(nid) * (DECAY_AMPA_PKJPF)
+                      + ST(nid) * (DECAY_AMPA_STPF)
+                      + VN(nid) * (DECAY_AMPA_VNMF)
+                      + IO(nid) * (DECAY_AMPA_IO));
+      auto gbar_inh = ( 0.8f * PKJ(nid) * (GBAR_INH_PKJ)
+                      +         ST(nid) * (0.0f)
+                      +0.05f *  VN(nid) * (GBAR_INH_VN)
+                      +         IO(nid) * (GBAR_INH_IO));
+      auto e_inh = (PKJ(nid) * (E_INH_PKJ)
+                   + ST(nid) * (0.0f)
+                   + VN(nid) * (E_INH_VN)
+                   + IO(nid) * (E_INH_IO));
+      auto decay_inh = (PKJ(nid) * (DECAY_GABA_PKJST)
+                       + ST(nid) * (0.0f)
+                       + VN(nid) * (DECAY_GABA_VNPKJ)
+                       + IO(nid) * (0.0f));
+      auto th = (PKJ(nid) * (TH_PKJ)
+                + ST(nid) * (TH_ST)
+                + VN(nid) * (TH_VN)
+                + IO(nid) * (TH_IO));
+      auto gbar_ahp = (PKJ(nid) * (GBAR_AHP_PKJ)
+                      + ST(nid) * (GBAR_AHP_ST)
+                      + VN(nid) * (GBAR_AHP_VN)
+                      + IO(nid) * (GBAR_AHP_IO));
+      auto e_ahp = (PKJ(nid) * (E_AHP_PKJ)
+                   + ST(nid) * (E_AHP_ST)
+                   + VN(nid) * (E_AHP_VN)
+                   + IO(nid) * (E_AHP_IO));
+      auto decay_ahp = (PKJ(nid) * (DECAY_AHP_PKJ)
+                       + ST(nid) * (DECAY_AHP_ST)
+                       + VN(nid) * (DECAY_AHP_VN)
+                       + IO(nid) * (DECAY_AHP_IO));
+      auto i_ex = (PKJ(nid) * (I_EX_PKJ)
+                  + ST(nid) * (I_EX_ST)
+                  + VN(nid) * (I_EX_VN)
+                  + IO(nid) * (I_EX_IO));
 
       // update conductances
-      if (pid < N_PKJ) {  //update st->pkj
+      if (tag[1] < N_PKJ) {  //update st->pkj
         auto rnd = genrand(tid);
-        auto coef = (             1.0f * (rnd < 0.25f)
+        auto coef = (             1.0f * (                rnd < 0.25f)
                     +DECAY_GABA_PKJST  * (0.25f <= rnd && rnd < 0.5f )
                     +DECAY_GABA_PKJST2 * (0.5f  <= rnd && rnd < 0.75f)
                     +DECAY_GABA_PKJST3 * (0.75f <= rnd));
-        ll_g_inh += GAMMA_PKJST * s_mol[pid + N_PKJ] * coef;
-      } else if (pid < N_PKJ + N_ST) {
-      } else if (pid < N_PKJ + N_ST + N_VN) {  //update pkj->vn
+        ll_g_inh += GAMMA_PKJST * s_mol[tag[1] + N_PKJ] * coef;
+      } else if (tag[1] < N_PKJ + N_ST) {
+      } else if (tag[1] < N_PKJ + N_ST + N_VN) {  //update pkj->vn
         auto s = 0;
         auto mf_firing_rate = 0.03f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD));
         auto sum = 0.0f;
@@ -403,7 +437,7 @@ static void update_mol(const int pid, const int tid, const int index, const int 
         }
         ll_g_inh += GAMMA_VNPKJ * s;
         ll_g_ex += sum;
-      } else if (pid < N_PKJ + N_ST + N_VN + N_IO) {  //update vn->io
+      } else if (tag[1] < N_PKJ + N_ST + N_VN + N_IO) {  //update vn->io
         auto mf_firing_rate = 0.003f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD));
         ll_g_ex += (genrand(tid) < mf_firing_rate);
       }
@@ -425,11 +459,11 @@ static void update_mol(const int pid, const int tid, const int index, const int 
       ll_g_ex *= decay_ex;
       ll_g_inh *= decay_inh;
       ll_g_ahp = ll_g_ahp * decay_ahp * (!spk) + spk;
-      u[target_neuron_id]                 = e_leak * spk + ll_u * (!spk);
-      g_ex[target_neuron_id]              = ll_g_ex;
-      g_inh[target_neuron_id]             = ll_g_inh;
-      g_ahp[target_neuron_id]             = ll_g_ahp;
-      s_mol[target_neuron_id - IDX_H_MOL] = spk;
+      u[nid]        = e_leak * spk + ll_u * (!spk);
+      g_ex[nid]     = ll_g_ex;
+      g_inh[nid]    = ll_g_inh;
+      g_ahp[nid]    = ll_g_ahp;
+      s_mol[tag[1]] = spk;
     }
   }
   flush_L1();
@@ -450,6 +484,7 @@ static void load_gr_spk(const int pid, const int tid, const int index, const uns
 
 }
 static void load_gr_spk(const int pid, const int tid, const int index, const unsigned long* s_gr) {
+  
 }
 
 void pzc_kernel(unsigned short* lists,
