@@ -2,7 +2,6 @@
 #define PROF
 #define PRINT
 
-#define MAX_PROF (6)
 enum ProfileSection {
   UPDATE_GR,
   LOAD_GR_SPK,
@@ -10,5 +9,6 @@ enum ProfileSection {
   CALC_INPUT_ST,
   UPDATE_GO,
   UPDATE_MOL,
-  ALL
+  ALL,
+  MAX_PROF
 };

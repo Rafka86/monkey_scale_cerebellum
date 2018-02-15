@@ -612,7 +612,7 @@ int main (int argc, char *argv[]) {
 #ifdef DEBUG
   if (world_rank == 0) {
     for (int i = 0; i < WORK_UNIT_SIZE; i++)
-      fprintf(local_fin, "%5d %f\n", i, debug[i]);
+      fprintf(local_fin, "%f\n", debug[i]);
     fclose(local_fin);
   }
 #endif

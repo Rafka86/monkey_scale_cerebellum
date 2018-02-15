@@ -94,7 +94,7 @@
 #define DECAY_AMPA_PKJPF  (0.886493f) //exp(-(double)DT/tau_ampa_pkjpf);
 #define DECAY_AMPA_PKJPF2 (0.785790f)
 #define DECAY_AMPA_PKJPF3 (0.696668f)
-#define KAPPA_PKJPF       (3.0e-4f)   //3.0e-4f //(0.1*0.003)
+#define KAPPA_PKJPF       (3.0e-5f)   //3.0e-4f //(0.1*0.003)
 #define DECAY_GABA_PKJST  (0.904847f) //exp(-DT/tau_gaba_pkjst);
 #define DECAY_GABA_PKJST2 (0.818748f)
 #define DECAY_GABA_PKJST3 (0.740842f)
@@ -111,10 +111,10 @@
 #define GBAR_AHP_ST  (100.0f)     // nS
 #define E_AHP_ST     (-70.0f)     //E_LEAK_PKJ
 #define DECAY_AHP_ST (0.670320f)  //exp(-(double)DT/tau_ahp_st);
-#define I_EX_ST      (100.0f)
+#define I_EX_ST      (250.0f)
 
-#define DECAY_AMPA_STPF  (0.886493f) //exp(-DT/tau_ampa_stpf);
-#define KAPPA_STPF       (1.5e-4f)
+#define DECAY_AMPA_STPF (0.886493f) //exp(-DT/tau_ampa_stpf);
+#define KAPPA_STPF      (1.5e-5f)
 
 #define TH_VN        (-38.8f)     // mV
 #define C_VN         (122.3f)     // microF
