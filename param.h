@@ -111,7 +111,7 @@
 #define GBAR_AHP_ST  (100.0f)     // nS
 #define E_AHP_ST     (-70.0f)     //E_LEAK_PKJ
 #define DECAY_AHP_ST (0.670320f)  //exp(-(double)DT/tau_ahp_st);
-#define I_EX_ST      (250.0f)
+#define I_EX_ST      (200.0f)
 
 #define DECAY_AMPA_STPF (0.886493f) //exp(-DT/tau_ampa_stpf);
 #define KAPPA_STPF      (1.5e-5f)
@@ -129,7 +129,7 @@
 #define GBAR_AHP_VN  (50.0f)      //0.5
 #define E_AHP_VN     (-70.0f)     // mV
 #define DECAY_AHP_VN (0.81873f)   //exp(-DT/tau_ahp_cn);
-#define I_EX_VN      (1000.0f)
+#define I_EX_VN      (500.0f)
 
 #define DECAY_AMPA_VNMF  (0.43460f) //exp(-(float)DT/tau_ampa_grmf);
 #define DECAY_GABA_VNPKJ (0.904f)   //10.0 (exp (/ -1.0 10.0))

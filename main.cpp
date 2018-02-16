@@ -409,6 +409,7 @@ int main (int argc, char *argv[]) {
   pzcl_event event = NULL;
 
   pzclSetKernelArg(kernel_init, 0, sizeof(pzcl_mem), &dev_seeds);
+  pzclSetKernelArg(kernel_init, 1, sizeof(pzcl_mem), &dev_w);
   err = pzclEnqueueNDRangeKernel(queue, kernel_init, 1, NULL, &work_unit_size, NULL, 0, NULL, &event);
   if (err) Error("pzclEnqueueNDRangeKernel: %d\n", err);
   if (event) {

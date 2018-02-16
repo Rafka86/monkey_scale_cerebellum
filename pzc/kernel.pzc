@@ -13,7 +13,7 @@
 #define GAHPAD  (0x28A0)
 #define SPKAD   (0x28C0)
 #define TAGAD   (0x28C8)
-#define GRSPKAD (0x28D0)
+#define WAD     (0x28D0)
 
 #define wbuf_float ((float*)WBUFAD)
 #define wbuf_uchar ((unsigned char*)WBUFAD)
@@ -25,7 +25,7 @@
 #define l_g_ahp    ((float*)GAHPAD)
 #define l_spk      ((unsigned char*)SPKAD)
 #define tag        ((unsigned char*)TAGAD)
-#define l_s_gr     ((unsigned long*)GRSPKAD)
+#define l_w        ((unsigned int*)WAD)
 
 enum MolecularTag {
   MTAG_NONE,
@@ -68,7 +68,7 @@ static inline float genrand(int tid) {
   return (float)((seed[tid] >> 16) * (1.52587890625e-05f)); //(1.0f/65536)
 }
 
-void pzc_init_local_memory(const unsigned int* seeds) {
+void pzc_init_local_memory(const unsigned int* seeds, const unsigned int* w) {
   auto pid = get_pid();
   auto tid = get_tid();
   auto idx = pid * MAX_TID + tid;
@@ -81,11 +81,22 @@ void pzc_init_local_memory(const unsigned int* seeds) {
     l_spk[tid] = 0;
   }
   seed[tid] = seeds[idx];
-  for (auto i = tid; i < 80; i += OFFSET)
-    l_s_gr[i] = 0UL;
+
 
   auto pref_id  = pid >> 8;
   auto pid_pref = pid & 255;
+  auto x = pid_pref & 31;
+  auto y = pid_pref >> 5;
+  for (auto i = 0; i < 5; i++) {
+    auto ax = x + X_GO_4;
+    auto ay = y + (pref_id + i * 7) - 4 + Y_GO_4;
+    auto cluster_id = ay * (X_GO + X_GO_2) + ax;
+    if (cluster_id > (X_GO + X_GO_2) * (Y_GO + Y_GO_2)) break;
+
+    for (auto j = tid; j < 256; j++)
+      l_w[i * 256 + tid] = w[cluster_id * 256 + tid];
+  }
+
   if (tid == 0) {
     tag[0] = MTAG_NONE;
     tag[1] = 0;
@@ -126,11 +137,7 @@ void pzc_fin_local_memory(float* debug) {
   else if (tid == 4) debug[idx] = l_g_inh[5];
   else if (tid == 5) debug[idx] = l_g_ahp[5];
   else if (tid == 6) debug[idx] = l_spk[5];
-  else if (tid == 7) debug[idx] = popl(l_s_gr[0]);
-
-  //for (auto i = tid; i < 80; i += OFFSET) {
-  //  debug[pid * 80 + i] = popl(l_s_gr[i]);
-  //}
+  else if (tid == 7) debug[idx] = l_w[0];
 
   flush();
   return;
@@ -271,10 +278,14 @@ static void update_go(const int pid, const int tid, const int index, const int t
 }
 
 static inline void calc_input_pkjgr_sub(const int pid_pref, const int tid, const int lc, const int offset, // lc is loop counter
-                                        const int pkj_id, const unsigned int* w) {
-  auto spk = l_s_gr[lc * 16 + tid + offset];
-  auto w_base = pkj_id * N_W_GR + pid_pref * 256 + (tid + offset) * 16;  // 256 = 16(length l_s_gr) * 64(bit size long) / 4(sizeof int)
-  auto sum = 0.0f;
+                                        const int pkj_id, const unsigned long* s_gr, const unsigned long* s_gr_rect) {
+  auto x = pid_pref & 31;
+  auto y = (pid_pref >> 5) - 4 + pkj_id;
+  auto use_rect = y < 0;
+  auto idx = use_rect ? (y + Y_GO_4) * (X_GO + X_GO_2) + (x + X_GO_4) : y * X_GO + x;
+  auto spk = use_rect ? s_gr_rect[idx * 16 + tid + offset] : s_gr[idx * 16 + tid + offset];
+  auto w_base = lc * 256 + (tid + offset) * 16;
+  auto local_sum = 0.0f;
   sync_L1();
   for (auto k = 0; k < 64; k += 4) {
     unsigned short z[4];
@@ -283,7 +294,7 @@ static inline void calc_input_pkjgr_sub(const int pid_pref, const int tid, const
     z[2] = get_spike(spk, k + 2);
     z[3] = get_spike(spk, k + 3);
     auto n = w_base + (k >> 2);
-    auto w_all = w[n];
+    auto w_all = l_w[n];
     auto part_input = (((w_all      ) & 0xff) * z[0]
                       +((w_all >>  8) & 0xff) * z[1]
                       +((w_all >> 16) & 0xff) * z[2]
@@ -296,13 +307,13 @@ static inline void calc_input_pkjgr_sub(const int pid_pref, const int tid, const
               +DECAY_AMPA_PKJPF2 * (0.5f  <= rnd && rnd < 0.75f)
               +DECAY_AMPA_PKJPF3 * (0.75f <= rnd));
     }
-    sum += KAPPA_PKJPF * 0.0009766f * part_input * coef;
+    local_sum += KAPPA_PKJPF * 0.0009766f * part_input * coef;
   }
-  wbuf_float[tid] += sum;
+  wbuf_float[tid] += local_sum;
 }
 
-static void calc_input_pkjgr(const int pid, const int tid, const int index,
-                             float* sum, float* g_ex, const unsigned long* s_gr, const unsigned int* w) {
+static void calc_input_pkjgr(const int pid, const int tid, 
+                             float* sum, const unsigned long* s_gr, const unsigned long* s_gr_rect) {
   auto pref_id = pid >> 8;
   auto pid_pref= pid & 255;
   if (pref_id == 7) return;
@@ -310,10 +321,10 @@ static void calc_input_pkjgr(const int pid, const int tid, const int index,
   auto count = 0;
   for (auto pkj_id = pref_id; pkj_id < N_PKJ; pkj_id += 7) {
     wbuf_float[tid] = 0.0f;
-    calc_input_pkjgr_sub(pid_pref, tid, count,      0, pkj_id, w);
-    calc_input_pkjgr_sub(pid_pref, tid, count, OFFSET, pkj_id, w);
+    calc_input_pkjgr_sub(pid_pref, tid, count,      0, pkj_id, s_gr, s_gr_rect);
+    calc_input_pkjgr_sub(pid_pref, tid, count, OFFSET, pkj_id, s_gr, s_gr_rect);
     if (tid == 0) sum[pid] = wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7];
-    //flush_L2();
+    flush_L2();
     if (pid_pref < 16) {
       auto base = 256 * pref_id + 16 * pid_pref;
       wbuf_float[tid] = sum[tid + base] + sum[tid + OFFSET + base];
@@ -331,20 +342,24 @@ static void calc_input_pkjgr(const int pid, const int tid, const int index,
   }
 }
 
-static void calc_input_stgr(const int pid, const int tid, const int index,
-                            float* sum, float* g_ex, const unsigned long* s_gr) {
+static void calc_input_stgr(const int pid, const int tid,
+                            float* sum, const unsigned long* s_gr, const unsigned long* s_gr_rect) {
   auto pref_id = pid >> 8;
   auto pid_pref= pid & 255;
   if (pref_id == 7) return;
 
   auto count = 0;
   for (auto st_id = pref_id; st_id < N_ST; st_id += 7) {
+    auto x = pid_pref & 31;
+    auto y = (pid_pref >> 5) - 4 + st_id;
+    auto use_rect = y < 0 || y <= Y_GO;
+    auto idx = use_rect ? (y + Y_GO_4) * (X_GO + X_GO_2) + (x + X_GO_4) : y * X_GO + x;
     sync_L1();
-    auto local_sum  = KAPPA_STPF * popl(l_s_gr[count * 16 + tid         ]);
-         local_sum += KAPPA_STPF * popl(l_s_gr[count * 16 + tid + OFFSET]);
+    auto local_sum  = KAPPA_STPF * popl(use_rect ? s_gr_rect[idx * 16 + tid         ] : s_gr[idx * 16 + tid         ]);
+         local_sum += KAPPA_STPF * popl(use_rect ? s_gr_rect[idx * 16 + tid + OFFSET] : s_gr[idx * 16 + tid + OFFSET]);
     wbuf_float[tid] = local_sum;
     if (tid == 0) sum[pid] = wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7];
-    //flush_L2();
+    flush_L2();
     if (pid_pref < 16) {
       auto base = 256 * pref_id + 16 * pid_pref;
       wbuf_float[tid] = sum[tid + base] + sum[tid + OFFSET + base];
@@ -363,7 +378,6 @@ static void calc_input_stgr(const int pid, const int tid, const int index,
 }
 
 static void update_mol(const int pid, const int tid, const int index, const int t_i, const int t_e,
-                       float* u, float* g_ex, float* g_inh, float* g_ahp,
                        unsigned char* s_mol) {
   if (tag[0] != MTAG_NONE) {
     auto nid = tag[1] + IDX_H_MOL;  // tag[1] is set neuron id in molecular
@@ -434,27 +448,32 @@ static void update_mol(const int pid, const int tid, const int index, const int 
                   + IO(nid) * (I_EX_IO));
 
       // update conductances
-      if (tag[1] < N_PKJ) {  //update st->pkj
-        auto rnd = genrand(tid);
-        auto coef = (             1.0f * (                rnd < 0.25f)
-                    +DECAY_GABA_PKJST  * (0.25f <= rnd && rnd < 0.5f )
-                    +DECAY_GABA_PKJST2 * (0.5f  <= rnd && rnd < 0.75f)
-                    +DECAY_GABA_PKJST3 * (0.75f <= rnd));
-        ll_g_inh += GAMMA_PKJST * s_mol[tag[1] + N_PKJ] * coef;
-      } else if (tag[1] < N_PKJ + N_ST) {
-      } else if (tag[1] < N_PKJ + N_ST + N_VN) {  //update pkj->vn
-        auto s = 0;
-        auto mf_firing_rate = 0.03f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD));
-        auto sum = 0.0f;
-        for (auto i = 0; i < N_PKJ; i++) {
-          sum += R_AMPA_VNMF * (genrand(tid) < mf_firing_rate) * 0.03125f; //0.03125f = 1/32
-          s += s_mol[i];
-        }
-        ll_g_inh += GAMMA_VNPKJ * s;
-        ll_g_ex += sum;
-      } else if (tag[1] < N_PKJ + N_ST + N_VN + N_IO) {  //update vn->io
-        auto mf_firing_rate = 0.003f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD));
-        ll_g_ex += (genrand(tid) < mf_firing_rate);
+      switch (tag[0]) {
+        case MTAG_PKJ: {
+          auto rnd = genrand(tid);
+          auto coef = (             1.0f * (                rnd < 0.25f)
+                      +DECAY_GABA_PKJST  * (0.25f <= rnd && rnd < 0.5f )
+                      +DECAY_GABA_PKJST2 * (0.5f  <= rnd && rnd < 0.75f)
+                      +DECAY_GABA_PKJST3 * (0.75f <= rnd));
+          ll_g_inh += GAMMA_PKJST * s_mol[tag[1] + N_PKJ] * coef;
+        } break;
+        case MTAG_ST: {
+        } break;
+        case MTAG_VN: {
+          auto s = 0;
+          auto mf_firing_rate = 0.03f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD));
+          auto sum = 0.0f;
+          for (auto i = 0; i < N_PKJ; i++) {
+            sum += R_AMPA_VNMF * (genrand(tid) < mf_firing_rate) * 0.03125f; //0.03125f = 1/32
+            s += s_mol[i];
+          }
+          ll_g_inh += GAMMA_VNPKJ * s;
+          ll_g_ex += sum;
+        } break;
+        case MTAG_IO: {
+          auto mf_firing_rate = 0.003f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD));
+          ll_g_ex += (genrand(tid) < mf_firing_rate);
+        } break;
       }
 
       // update v
@@ -496,29 +515,6 @@ static void store_spikes(const int pid, const int tid, const int index, const in
   flush_L1();
 }
 
-static void load_gr_spk_sub(const int tid, const int x, const int y, const bool use_rect, const int offset,
-                            const unsigned long* s_gr_rect, const unsigned long* s_gr) {
-  auto cid = use_rect ? (y + Y_GO_4) * (X_GO + X_GO_2) + (x + X_GO_4) : y * X_GO + x; // cluster id
-  l_s_gr[offset * 16 + tid         ] = use_rect ? s_gr_rect[cid * 16 + tid         ] : s_gr[cid * 16 + tid         ];
-  l_s_gr[offset * 16 + tid + OFFSET] = use_rect ? s_gr_rect[cid * 16 + tid + OFFSET] : s_gr[cid * 16 + tid + OFFSET];
-}
-
-static void load_gr_spk(const int pid, const int tid, const unsigned long* s_gr_rect, const unsigned long* s_gr) {
-  auto pref_id  = pid >> 8;
-  auto pid_pref = pid & 255;
-  auto x        = pid_pref & 31;
-  auto y        = pid_pref >> 5;
-  if (pref_id == 7) return;
-
-  for (auto i = 0; i < 5; i++) {
-    auto pkj_id = i * 7 + pref_id;
-    if (pkj_id >= N_PKJ) return;
-
-    auto ay     = y + pkj_id - 4;
-    load_gr_spk_sub(tid, x, ay, ay < 0, i, s_gr_rect, s_gr);
-  }
-}
-
 void pzc_kernel(unsigned short* lists,
                 unsigned long* s_gr, unsigned long* s_gr_rect, unsigned char* s_go, unsigned char* s_mol,
                 float* u, float* g_ex, float* g_inh, float* g_ahp,
@@ -551,19 +547,7 @@ void pzc_kernel(unsigned short* lists,
 #endif
 
     {
-      load_gr_spk(pid, tid, s_gr_rect, s_gr);
-    }
-
-#ifdef PROF
-    if (pid == 0 && tid == 0) {
-      etc.Update();
-      gPerf[LOAD_GR_SPK] = etc - stc;
-      stc.Update();
-    }
-#endif
-
-    {
-      calc_input_pkjgr(pid, tid, index, sum, g_ex, s_gr_rect, w);
+      calc_input_pkjgr(pid, tid, sum, s_gr, s_gr_rect);
     }
 
 #ifdef PROF
@@ -575,7 +559,7 @@ void pzc_kernel(unsigned short* lists,
 #endif
 
     {
-      calc_input_stgr(pid, tid, index, sum, g_ex, s_gr_rect);
+      calc_input_stgr(pid, tid, sum, s_gr, s_gr_rect);
     }
 
 #ifdef PROF
@@ -600,7 +584,7 @@ void pzc_kernel(unsigned short* lists,
 #endif
 
     {
-      update_mol(pid, tid, index, t_i, t_e, u, g_ex, g_inh, g_ahp, s_mol);
+      update_mol(pid, tid, index, t_i, t_e, s_mol);
       flush();
     }
 
