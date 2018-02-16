@@ -2,3 +2,7 @@ obj/
 main
 *.log
 kernel.sc2/
+profile/
+*.spk.*.*
+log.*.*
+*.bak
