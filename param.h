@@ -1,25 +1,27 @@
 #include "modes.h"
 
-#define R_N2 (32 * 32)
+constexpr int R_N2 = 32 * 32;
 
-#define N_GR  (32 * 32 * R_N2)
+#define X_GR (32)
+#define Y_GR (32)
+constexpr int N_GR = X_GR * Y_GR * R_N2;
 #define X_GO  (32)
 #define Y_GO  (32)
-#define N_GO  (1024) // X_GO * Y_GO
+constexpr int N_GO = X_GO * Y_GO;
 #define N_PKJ (32)
 #define N_ST  (32)
 #define N_VN  (1)
 #define N_IO  (1)
 
-#define N_ALL ((N_GR) + (N_GO) + (N_PKJ) + (N_ST) + (N_VN) + (N_IO))
-#define N_MOL ((N_PKJ) + (N_ST) + (N_VN) + (N_IO))
+constexpr int N_ALL = N_GR + N_GO + N_PKJ + N_ST + N_VN + N_IO;
+constexpr int N_MOL = N_PKJ + N_ST + N_VN + N_IO;
 
-#define N_S_GR (N_GR >> 6)
-#define N_W_GR (N_GR >> 2)
-#define X_GO_4 (X_GO >> 2)
-#define Y_GO_4 (Y_GO >> 2)
-#define X_GO_2 (X_GO >> 1)
-#define Y_GO_2 (Y_GO >> 1)
+constexpr int N_S_GR = N_GR >> 6;
+constexpr int N_W_GR = N_GR >> 2;
+constexpr int X_GO_4 = X_GO >> 2;
+constexpr int Y_GO_4 = Y_GO >> 2;
+constexpr int X_GO_2 = X_GO >> 1;
+constexpr int Y_GO_2 = Y_GO >> 1;
 
 #define TH_GR        (-35.0f)
 #define C_GR         (3.1f)
@@ -98,7 +100,7 @@
 #define DECAY_GABA_PKJST  (0.904847f) //exp(-DT/tau_gaba_pkjst);
 #define DECAY_GABA_PKJST2 (0.818748f)
 #define DECAY_GABA_PKJST3 (0.740842f)
-#define GAMMA_PKJST       (0.333f*N_ST)
+constexpr int GAMMA_PKJST = 0.333f * N_ST;
 
 #define TH_ST        (-55.0f)     // mV
 #define C_ST         (106.0f)     // pF
@@ -152,26 +154,26 @@
 
 #define DECAY_AMPA_IO (0.904837f)
 
-#define IDX_H_GR  (0)
-#define IDX_T_GR  ((IDX_H_GR) + (N_GR))
-#define IDX_H_GO  (IDX_T_GR)
-#define IDX_T_GO  ((IDX_H_GO) + (N_GO))
-#define IDX_H_PKJ (IDX_T_GO)
-#define IDX_T_PKJ ((IDX_H_PKJ) + (N_PKJ))
-#define IDX_H_ST  (IDX_T_PKJ)
-#define IDX_T_ST  ((IDX_H_ST) + (N_ST))
-#define IDX_H_VN  (IDX_T_ST)
-#define IDX_T_VN  ((IDX_H_VN) + (N_VN))
-#define IDX_H_IO  (IDX_T_VN)
-#define IDX_T_IO  ((IDX_H_IO) + (N_IO))
-#define IDX_H_MOL (IDX_H_PKJ)
+constexpr int IDX_H_GR  = 0;
+constexpr int IDX_T_GR  = IDX_H_GR + N_GR;
+constexpr int IDX_H_GO  = IDX_T_GR;
+constexpr int IDX_T_GO  = IDX_H_GO + N_GO;
+constexpr int IDX_H_PKJ = IDX_T_GO;
+constexpr int IDX_T_PKJ = IDX_H_PKJ + N_PKJ;
+constexpr int IDX_H_ST  = IDX_T_PKJ;
+constexpr int IDX_T_ST  = IDX_H_ST + N_ST;
+constexpr int IDX_H_VN  = IDX_T_ST;
+constexpr int IDX_T_VN  = IDX_H_VN + N_VN;
+constexpr int IDX_H_IO  = IDX_T_VN;
+constexpr int IDX_T_IO  = IDX_H_IO + N_IO;
+constexpr int IDX_H_MOL = IDX_T_GO;
 
-#define GR(i)  (((IDX_H_GR)  <= (i)) && ((i) < (IDX_T_GR) ))
-#define GO(i)  (((IDX_H_GO)  <= (i)) && ((i) < (IDX_T_GO) ))
-#define PKJ(i) (((IDX_H_PKJ) <= (i)) && ((i) < (IDX_T_PKJ)))
-#define ST(i)  (((IDX_H_ST)  <= (i)) && ((i) < (IDX_T_ST) ))
-#define VN(i)  (((IDX_H_VN)  <= (i)) && ((i) < (IDX_T_VN) ))
-#define IO(i)  (((IDX_H_IO)  <= (i)) && ((i) < (IDX_T_IO) ))
+constexpr bool  GR(int i) { return IDX_H_GR  <= i && i <  IDX_T_GR; }
+constexpr bool  GO(int i) { return IDX_H_GO  <= i && i <  IDX_T_GO; }
+constexpr bool PKJ(int i) { return IDX_H_PKJ <= i && i < IDX_T_PKJ; }
+constexpr bool  ST(int i) { return IDX_H_ST  <= i && i <  IDX_T_ST; }
+constexpr bool  VN(int i) { return IDX_H_VN  <= i && i <  IDX_T_VN; }
+constexpr bool  IO(int i) { return IDX_H_IO  <= i && i <  IDX_T_IO; }
 
 #define N_TRIALS (1)
 #define N_PERIOD (6000) // 6000 msec
@@ -181,7 +183,7 @@
 
 #define MAX_PID        (1984)
 #define MAX_TID        (8)
-#define WORK_UNIT_SIZE ((MAX_PID) * (MAX_TID))
+constexpr int WORK_UNIT_SIZE = MAX_PID * MAX_TID;
 #define N_MAX_THREADS  (WORK_UNIT_SIZE)
 
 #define N_GR_P  (1024)

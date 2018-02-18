@@ -169,10 +169,10 @@ static void update_gr(const int pid, const int tid, const int index, const int t
       } 
     }
 
-    sync_L1();
     auto spk_block = s_gr[i];
     wbuf_uchar[wbuf_i] = 0;
 
+    sync_L1();
     for (auto j = 0; j < 8; j++) {
       auto spk = get_spike(spk_block, tid * 8 + j);
       auto target_neuron_id = i * 64 + tid * 8 + j;
@@ -231,6 +231,7 @@ static void update_go(const int pid, const int tid, const int index, const int t
     for (auto j = tid; j < N_GR_PER_GO; j += OFFSET) {
       auto idx = list_gogr[i * N_GO + j];
       auto sp = &s_gr[idx * 16];
+      chgthread();
       auto spikes_gr = 0;
       for (auto k = 0; k < 16; k++)
         spikes_gr += popl(sp[k]);
