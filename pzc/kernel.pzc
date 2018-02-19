@@ -143,98 +143,117 @@ void pzc_fin_local_memory(float* debug) {
   return;
 }
 
+static inline void update_gr_sub(const int i, const int tid, const int wbuf_i, float* inh_input, const float mf_frate,
+                                 float* u, float* g_ex, float* g_inh, float* g_ahp, unsigned long* s_gr,
+                                 const unsigned short* list_grgo, const unsigned char* s_go) {
+  //calc input from go
+  {
+    auto gr_group_id = i >> 4;
+
+    auto idx = list_grgo[gr_group_id * N_GO + tid];
+    auto rnd = genrand(tid);
+    wbuf_float[tid] = (1.0f              * (rnd < 0.25f)
+                      +DECAY_GABA1_GRGO  * (0.25f <= rnd && rnd < 0.5f)
+                      +DECAY_GABA1_GRGO2 * (0.5f <= rnd && rnd < 0.75f)
+                      +DECAY_GABA1_GRGO3 * (0.75f <= rnd)) * R_GABA1_GRGO * s_go[idx];
+
+    sync_L1();
+    if (tid == 0) {
+      *inh_input = wbuf_float[0] + wbuf_float[1] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7];
+      *inh_input *= GAMMA;
+    } 
+  }
+
+  auto spk_block = s_gr[i];
+  wbuf_uchar[wbuf_i] = 0;
+
+  sync_L1();
+  for (int j = 0; j < 8; j++) {
+    auto spk = get_spike(spk_block, tid * 8 + j);
+    auto target_neuron_id = i * 64 + tid * 8 + j;
+    auto ll_u     = u[target_neuron_id];
+    auto ll_g_ex  = g_ex[target_neuron_id];
+    auto ll_g_inh = g_inh[target_neuron_id];
+    auto ll_g_ahp = g_ahp[target_neuron_id];
+
+    // update conductances
+    ll_g_ahp = ll_g_ahp * DECAY_AHP_GR * (!spk) + spk;
+    ll_g_ex *= DECAY_AMPA_GRMF;
+    auto sum = 0;
+    for (auto k = 0; k < N_MF_PER_GR; k++)
+      sum += genrand(tid) < (mf_frate * (k == 0) + 0.005 * (k != 0));
+    ll_g_ex += LAMBDA * R_AMPA_GRMF * (float)sum;
+    ll_g_inh *= DECAY_GABA1_GRGO;
+    ll_g_inh += *inh_input;
+
+    // update v
+    auto du1 = DT * INV_C_GR * (-GBAR_LEAK_GR            * (ll_u - E_LEAK_GR)
+                                -GBAR_EX_GR   * ll_g_ex  * (ll_u - E_EX_GR)
+                                -GBAR_INH_GR  * ll_g_inh * (ll_u - E_INH_GR)
+                                -GBAR_AHP_GR  * ll_g_ahp * (ll_u - E_AHP_GR)
+                                +I_EX_GR);
+    auto du2 = DT * INV_C_GR * (-GBAR_LEAK_GR            * (ll_u + du1 - E_LEAK_GR)
+                                -GBAR_EX_GR   * ll_g_ex  * (ll_u + du1 - E_EX_GR)
+                                -GBAR_INH_GR  * ll_g_inh * (ll_u + du1 - E_INH_GR)
+                                -GBAR_AHP_GR  * ll_g_ahp * (ll_u + du1 - E_AHP_GR)
+                                +I_EX_GR);
+    ll_u += 0.5f * (du1 + du2);
+    spk = ll_u > TH_GR;
+    u[target_neuron_id]     = E_LEAK_GR * spk + ll_u * (!spk);
+    g_ex[target_neuron_id]  = ll_g_ex;
+    g_inh[target_neuron_id] = ll_g_inh;
+    g_ahp[target_neuron_id] = ll_g_ahp;
+    wbuf_uchar[7 - tid] |= (spk << j);
+  }
+  sync_L1();
+  if (tid == 0) s_gr[i] = wbuf_ulong[0];
+}
+
 static void update_gr(const int pid, const int tid, const int index, const int t_e, const int t_i,
                       float* u, float* g_ex, float* g_inh, float* g_ahp, unsigned long* s_gr,
                       const unsigned short* list_grgo, const unsigned char* s_go) {
   auto wbuf_i = 7 - tid;
-  auto count = 0;
   auto inh_input = &wbuf_float[2];
   auto mf_firing_rate = 0.03f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD));
-  for (auto i = pid; i < N_S_GR; i += MAX_PID) {
-    //calc input from go
-    {
-      auto gr_group_id = i >> 4;
-
-      auto idx = list_grgo[gr_group_id * N_GO + tid];
-      auto rnd = genrand(tid);
-      wbuf_float[tid] = (1.0f              * (rnd < 0.25f)
-                        +DECAY_GABA1_GRGO  * (0.25f <= rnd && rnd < 0.5f)
-                        +DECAY_GABA1_GRGO2 * (0.5f <= rnd && rnd < 0.75f)
-                        +DECAY_GABA1_GRGO3 * (0.75f <= rnd)) * R_GABA1_GRGO * s_go[idx];
-
-      sync_L1();
-      if (tid == 0) {
-        *inh_input = wbuf_float[0] + wbuf_float[1] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7];
-        *inh_input *= GAMMA;
-      } 
-    }
-
-    auto spk_block = s_gr[i];
-    wbuf_uchar[wbuf_i] = 0;
-
-    sync_L1();
-    for (auto j = 0; j < 8; j++) {
-      auto spk = get_spike(spk_block, tid * 8 + j);
-      auto target_neuron_id = i * 64 + tid * 8 + j;
-      auto ll_u     = u[target_neuron_id];
-      auto ll_g_ex  = g_ex[target_neuron_id];
-      auto ll_g_inh = g_inh[target_neuron_id];
-      auto ll_g_ahp = g_ahp[target_neuron_id];
-
-      // update conductances
-      ll_g_ahp = ll_g_ahp * DECAY_AHP_GR * (!spk) + spk;
-      ll_g_ex *= DECAY_AMPA_GRMF;
-      auto sum = 0;
-      for (auto k = 0; k < N_MF_PER_GR; k++)
-        sum += genrand(tid) < (mf_firing_rate * (k == 0) + 0.005 * (k != 0));
-      ll_g_ex += LAMBDA * R_AMPA_GRMF * (float)sum;
-      ll_g_inh *= DECAY_GABA1_GRGO;
-      ll_g_inh += *inh_input;
-
-      // update v
-      auto du1 = DT * INV_C_GR * (-GBAR_LEAK_GR            * (ll_u - E_LEAK_GR)
-                                  -GBAR_EX_GR   * ll_g_ex  * (ll_u - E_EX_GR)
-                                  -GBAR_INH_GR  * ll_g_inh * (ll_u - E_INH_GR)
-                                  -GBAR_AHP_GR  * ll_g_ahp * (ll_u - E_AHP_GR)
-                                  +I_EX_GR);
-      auto du2 = DT * INV_C_GR * (-GBAR_LEAK_GR            * (ll_u + du1 - E_LEAK_GR)
-                                  -GBAR_EX_GR   * ll_g_ex  * (ll_u + du1 - E_EX_GR)
-                                  -GBAR_INH_GR  * ll_g_inh * (ll_u + du1 - E_INH_GR)
-                                  -GBAR_AHP_GR  * ll_g_ahp * (ll_u + du1 - E_AHP_GR)
-                                  +I_EX_GR);
-      ll_u += 0.5f * (du1 + du2);
-      spk = ll_u > TH_GR;
-      u[target_neuron_id]     = E_LEAK_GR * spk + ll_u * (!spk);
-      g_ex[target_neuron_id]  = ll_g_ex;
-      g_inh[target_neuron_id] = ll_g_inh;
-      g_ahp[target_neuron_id] = ll_g_ahp;
-      wbuf_uchar[wbuf_i] |= (spk << j);
-    }
-    sync_L1();
-    if (tid == 0) s_gr[i] = wbuf_ulong[0];
-    if (++count == 4) {
-      flush_L2();
-      count = 0;
-    } else {
-      flush_L1();
-    }
-  }
+  update_gr_sub(pid              , tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
+  flush_L1();
+  update_gr_sub(pid + MAX_PID    , tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
+  flush_L1();
+  update_gr_sub(pid + MAX_PID * 2, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
+  flush_L1();
+  update_gr_sub(pid + MAX_PID * 3, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
+  flush_L2();
+  update_gr_sub(pid + MAX_PID * 4, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
+  flush_L1();
+  update_gr_sub(pid + MAX_PID * 5, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
+  flush_L1();
+  update_gr_sub(pid + MAX_PID * 6, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
+  flush_L1();
+  update_gr_sub(pid + MAX_PID * 7, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
+  flush_L2();
+  if (pid + MAX_PID * 8 >= N_S_GR) return;
+  update_gr_sub(pid + MAX_PID * 8, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
+  flush_L1();
 }
 
 static void update_go(const int pid, const int tid, const int index, const int t_e, const int t_i,
                       unsigned char* s_go, const unsigned short* list_gogr, const unsigned long* s_gr) {
-  for (auto i = pid; i < N_GO; i += MAX_PID) {
-    auto target_neuron_id = i + IDX_H_GO;
+  //for (auto i = pid; i < N_GO; i += MAX_PID) {
+  if (pid >= N_GO) return;
+  {
+    auto target_neuron_id = pid + IDX_H_GO;
 
     // calc input from gr
+    auto input = 0.0f;
     wbuf_float[tid] = 0.0f;
-    for (auto j = tid; j < N_GR_PER_GO; j += OFFSET) {
-      auto idx = list_gogr[i * N_GO + j];
+    sync_L1();
+    for (auto j = 0; j < N_GR_PER_GO; j++) {
+      auto idx = list_gogr[pid * N_GO + j];
       auto sp = &s_gr[idx * 16];
-      chgthread();
       auto spikes_gr = 0;
-      for (auto k = 0; k < 16; k++)
-        spikes_gr += popl(sp[k]);
+      spikes_gr += popl(sp[tid          ]);
+      spikes_gr += popl(sp[tid + MAX_TID]);
+      chgthread();
       for (auto k = 0; k < spikes_gr; k++) {
         auto rnd = genrand(tid);
         wbuf_float[tid] += (1.0f             * (rnd < 0.25f)
@@ -243,10 +262,10 @@ static void update_go(const int pid, const int tid, const int index, const int t
                            +DECAY_AMPA_GOGR3 * (0.75f <= rnd));
       }
     }
-    sync_L1();
 
     // update gr state
     if (tid == 0) {
+      input = wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7];
       auto spk      = l_spk[tid];
       auto ll_u     = l_u[tid];    // ll is loaded local
       auto ll_g_ex  = l_g_ex[tid];
@@ -254,7 +273,7 @@ static void update_go(const int pid, const int tid, const int index, const int t
 
       // update conductances
       ll_g_ex *= DECAY_AMPA_GOGR;
-      ll_g_ex += wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3];
+      ll_g_ex += input;
       ll_g_ahp = ll_g_ahp * DECAY_AHP_GO * (!spk) + spk;
 
       // update v
