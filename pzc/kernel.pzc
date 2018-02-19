@@ -4,16 +4,17 @@
 #include "../param.h"
 
 #define OFFSET  (MAX_TID)
-#define WBUFAD  (0x2800)
-#define SEEDAD  (0x2820)
+constexpr unsigned int WBUFAD = STACK_SIZE * MAX_TID;
+constexpr unsigned int SEEDAD = WBUFAD + sizeof(float) * MAX_TID;
 #define LENGTH  (6)
-#define UAD     (0x2840)
-#define GEXAD   (0x2860)
-#define GINHAD  (0x2880)
-#define GAHPAD  (0x28A0)
-#define SPKAD   (0x28C0)
-#define TAGAD   (0x28C8)
-#define WAD     (0x28D0)
+constexpr unsigned int UAD     = SEEDAD + sizeof(unsigned int)  * MAX_TID;
+constexpr unsigned int GEXAD   = UAD    + sizeof(float)         * LENGTH;
+constexpr unsigned int GINHAD  = GEXAD  + sizeof(float)         * LENGTH;
+constexpr unsigned int GAHPAD  = GINHAD + sizeof(float)         * LENGTH;
+constexpr unsigned int SPKAD   = GAHPAD + sizeof(float)         * LENGTH;
+constexpr unsigned int TAGAD   = SPKAD  + sizeof(unsigned char) * LENGTH;
+constexpr unsigned int WAD     = TAGAD  + sizeof(unsigned char) * 2;
+constexpr unsigned int GRSPKAD = WAD    + sizeof(unsigned int)  * 1280;
 
 #define wbuf_float ((float*)WBUFAD)
 #define wbuf_uchar ((unsigned char*)WBUFAD)
@@ -26,6 +27,7 @@
 #define l_spk      ((unsigned char*)SPKAD)
 #define tag        ((unsigned char*)TAGAD)
 #define l_w        ((unsigned int*)WAD)
+#define l_s_gr     ((unsigned long*)GRSPKAD)
 
 enum MolecularTag {
   MTAG_NONE,
@@ -137,13 +139,13 @@ void pzc_fin_local_memory(float* debug) {
   else if (tid == 4) debug[idx] = l_g_inh[5];
   else if (tid == 5) debug[idx] = l_g_ahp[5];
   else if (tid == 6) debug[idx] = l_spk[5];
-  else if (tid == 7) debug[idx] = l_w[0];
+  else if (tid == 7) debug[idx] = GRSPKAD;
 
   flush();
   return;
 }
 
-static inline void update_gr_sub(const int i, const int tid, const int wbuf_i, float* inh_input, const float mf_frate,
+static inline void update_gr_sub(const int count, const int i, const int tid, const int wbuf_i, float* inh_input, const float mf_frate,
                                  float* u, float* g_ex, float* g_inh, float* g_ahp, unsigned long* s_gr,
                                  const unsigned short* list_grgo, const unsigned char* s_go) {
   //calc input from go
@@ -206,7 +208,7 @@ static inline void update_gr_sub(const int i, const int tid, const int wbuf_i, f
     wbuf_uchar[7 - tid] |= (spk << j);
   }
   sync_L1();
-  if (tid == 0) s_gr[i] = wbuf_ulong[0];
+  if (tid == 0) l_s_gr[count] = wbuf_ulong[0];
 }
 
 static void update_gr(const int pid, const int tid, const int index, const int t_e, const int t_i,
@@ -215,25 +217,27 @@ static void update_gr(const int pid, const int tid, const int index, const int t
   auto wbuf_i = 7 - tid;
   auto inh_input = &wbuf_float[2];
   auto mf_firing_rate = 0.03f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD));
-  update_gr_sub(pid              , tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
-  flush_L1();
-  update_gr_sub(pid + MAX_PID    , tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
-  flush_L1();
-  update_gr_sub(pid + MAX_PID * 2, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
-  flush_L1();
-  update_gr_sub(pid + MAX_PID * 3, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
-  flush_L2();
-  update_gr_sub(pid + MAX_PID * 4, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
-  flush_L1();
-  update_gr_sub(pid + MAX_PID * 5, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
-  flush_L1();
-  update_gr_sub(pid + MAX_PID * 6, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
-  flush_L1();
-  update_gr_sub(pid + MAX_PID * 7, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
-  flush_L2();
+  update_gr_sub(0, pid              , tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
+  update_gr_sub(1, pid + MAX_PID    , tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
+  update_gr_sub(2, pid + MAX_PID * 2, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
+  update_gr_sub(3, pid + MAX_PID * 3, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
+  update_gr_sub(4, pid + MAX_PID * 4, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
+  update_gr_sub(5, pid + MAX_PID * 5, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
+  update_gr_sub(6, pid + MAX_PID * 6, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
+  update_gr_sub(7, pid + MAX_PID * 7, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
+  if (pid + MAX_PID * 8 >= N_S_GR) goto LAST;
+  update_gr_sub(8, pid + MAX_PID * 8, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
+LAST:
+  s_gr[pid + MAX_PID * 0] = l_s_gr[0];
+  s_gr[pid + MAX_PID * 1] = l_s_gr[1];
+  s_gr[pid + MAX_PID * 2] = l_s_gr[2];
+  s_gr[pid + MAX_PID * 3] = l_s_gr[3];
+  s_gr[pid + MAX_PID * 4] = l_s_gr[4];
+  s_gr[pid + MAX_PID * 5] = l_s_gr[5];
+  s_gr[pid + MAX_PID * 6] = l_s_gr[6];
+  s_gr[pid + MAX_PID * 7] = l_s_gr[7];
   if (pid + MAX_PID * 8 >= N_S_GR) return;
-  update_gr_sub(pid + MAX_PID * 8, tid, wbuf_i, inh_input, mf_firing_rate, u, g_ex, g_inh, g_ahp, s_gr, list_grgo, s_go);
-  flush_L1();
+  s_gr[pid + MAX_PID * 8] = l_s_gr[8];
 }
 
 static void update_go(const int pid, const int tid, const int index, const int t_e, const int t_i,

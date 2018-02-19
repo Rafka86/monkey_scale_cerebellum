@@ -183,6 +183,7 @@ constexpr bool  IO(int i) { return IDX_H_IO  <= i && i <  IDX_T_IO; }
 
 #define MAX_PID        (1984)
 #define MAX_TID        (8)
+#define STACK_SIZE     (1300)
 constexpr int WORK_UNIT_SIZE = MAX_PID * MAX_TID;
 #define N_MAX_THREADS  (WORK_UNIT_SIZE)
 

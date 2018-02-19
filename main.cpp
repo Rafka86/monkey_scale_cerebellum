@@ -266,10 +266,10 @@ int main (int argc, char *argv[]) {
   if (err) Error("pzclCreateCommandQueue: %d\n", err);
 
   // Stackサイズを1.2KBに
-  SetStackSize (kernel,      1280);
-  SetStackSize (kernel_init, 1280);
-  SetStackSize (kernel_fin,  1280);
-  SetStackSize (kernel_prof, 1280);
+  SetStackSize (kernel,      STACK_SIZE);
+  SetStackSize (kernel_init, STACK_SIZE);
+  SetStackSize (kernel_fin,  STACK_SIZE);
+  SetStackSize (kernel_prof, STACK_SIZE);
 
   //
   // Data Setup
