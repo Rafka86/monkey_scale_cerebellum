@@ -4,16 +4,17 @@
 #include "../param.h"
 
 #define OFFSET  (MAX_TID)
-#define WBUFAD  (0x2800)
-#define SEEDAD  (0x2820)
+constexpr unsigned int WBUFAD = STACK_SIZE * MAX_TID;
+constexpr unsigned int SEEDAD = WBUFAD + sizeof(float) * MAX_TID;
 #define LENGTH  (6)
-#define UAD     (0x2840)
-#define GEXAD   (0x2860)
-#define GINHAD  (0x2880)
-#define GAHPAD  (0x28A0)
-#define SPKAD   (0x28C0)
-#define TAGAD   (0x28C8)
-#define WAD     (0x28D0)
+constexpr unsigned int UAD     = SEEDAD + sizeof(unsigned int)  * MAX_TID;
+constexpr unsigned int GEXAD   = UAD    + sizeof(float)         * LENGTH;
+constexpr unsigned int GINHAD  = GEXAD  + sizeof(float)         * LENGTH;
+constexpr unsigned int GAHPAD  = GINHAD + sizeof(float)         * LENGTH;
+constexpr unsigned int SPKAD   = GAHPAD + sizeof(float)         * LENGTH;
+constexpr unsigned int TAGAD   = SPKAD  + sizeof(unsigned char) * LENGTH;
+constexpr unsigned int WAD     = TAGAD  + sizeof(unsigned char) * 2;
+constexpr unsigned int GRSPKAD = WAD    + sizeof(unsigned int)  * 1280;
 
 #define wbuf_float ((float*)WBUFAD)
 #define wbuf_uchar ((unsigned char*)WBUFAD)
@@ -26,6 +27,7 @@
 #define l_spk      ((unsigned char*)SPKAD)
 #define tag        ((unsigned char*)TAGAD)
 #define l_w        ((unsigned int*)WAD)
+#define l_s_gr     ((unsigned long*)GRSPKAD)
 
 enum MolecularTag {
   MTAG_NONE,
@@ -94,7 +96,7 @@ void pzc_init_local_memory(const unsigned int* seeds, const unsigned int* w) {
     if (cluster_id > (X_GO + X_GO_2) * (Y_GO + Y_GO_2)) break;
 
     for (auto j = tid; j < 256; j++)
-      l_w[i * 256 + tid] = w[cluster_id * 256 + tid];
+      l_w[i * 256 + j] = w[cluster_id * 256 + j];
   }
 
   if (tid == 0) {
@@ -137,7 +139,7 @@ void pzc_fin_local_memory(float* debug) {
   else if (tid == 4) debug[idx] = l_g_inh[5];
   else if (tid == 5) debug[idx] = l_g_ahp[5];
   else if (tid == 6) debug[idx] = l_spk[5];
-  else if (tid == 7) debug[idx] = l_w[0];
+  else if (tid == 7) debug[idx] = GRSPKAD;
 
   flush();
   return;
@@ -147,8 +149,8 @@ static void update_gr(const int pid, const int tid, const int index, const int t
                       float* u, float* g_ex, float* g_inh, float* g_ahp, unsigned long* s_gr,
                       const unsigned short* list_grgo, const unsigned char* s_go) {
   auto wbuf_i = 7 - tid;
-  auto count = 0;
   auto inh_input = &wbuf_float[2];
+  auto count = 0;
   auto mf_firing_rate = 0.03f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD));
   for (auto i = pid; i < N_S_GR; i += MAX_PID) {
     //calc input from go
@@ -169,11 +171,11 @@ static void update_gr(const int pid, const int tid, const int index, const int t
       } 
     }
 
-    sync_L1();
-    auto spk_block = s_gr[i];
+    auto spk_block = s_gr[pid * 9 + i];
     wbuf_uchar[wbuf_i] = 0;
 
-    for (auto j = 0; j < 8; j++) {
+    sync_L1();
+    for (int j = 0; j < 8; j++) {
       auto spk = get_spike(spk_block, tid * 8 + j);
       auto target_neuron_id = i * 64 + tid * 8 + j;
       auto ll_u     = u[target_neuron_id];
@@ -208,32 +210,33 @@ static void update_gr(const int pid, const int tid, const int index, const int t
       g_ex[target_neuron_id]  = ll_g_ex;
       g_inh[target_neuron_id] = ll_g_inh;
       g_ahp[target_neuron_id] = ll_g_ahp;
-      wbuf_uchar[wbuf_i] |= (spk << j);
+      wbuf_uchar[7 - tid] |= (spk << j);
     }
     sync_L1();
-    if (tid == 0) s_gr[i] = wbuf_ulong[0];
-    if (++count == 4) {
-      flush_L2();
-      count = 0;
-    } else {
-      flush_L1();
-    }
+    if (tid == 0) l_s_gr[count++] = wbuf_ulong[0];
   }
+  for (auto i = tid; i < 9 && pid + MAX_PID * i < N_S_GR; i += MAX_TID)
+    s_gr[pid + MAX_PID * i] = l_s_gr[i];
 }
 
 static void update_go(const int pid, const int tid, const int index, const int t_e, const int t_i,
                       unsigned char* s_go, const unsigned short* list_gogr, const unsigned long* s_gr) {
-  for (auto i = pid; i < N_GO; i += MAX_PID) {
-    auto target_neuron_id = i + IDX_H_GO;
+  //for (auto i = pid; i < N_GO; i += MAX_PID) {
+  if (pid >= N_GO) return;
+  {
+    auto target_neuron_id = pid + IDX_H_GO;
 
     // calc input from gr
+    auto input = 0.0f;
     wbuf_float[tid] = 0.0f;
-    for (auto j = tid; j < N_GR_PER_GO; j += OFFSET) {
-      auto idx = list_gogr[i * N_GO + j];
+    sync_L1();
+    for (auto j = 0; j < N_GR_PER_GO; j++) {
+      auto idx = list_gogr[pid * N_GO + j];
       auto sp = &s_gr[idx * 16];
       auto spikes_gr = 0;
-      for (auto k = 0; k < 16; k++)
-        spikes_gr += popl(sp[k]);
+      spikes_gr += popl(sp[tid          ]);
+      spikes_gr += popl(sp[tid + MAX_TID]);
+      chgthread();
       for (auto k = 0; k < spikes_gr; k++) {
         auto rnd = genrand(tid);
         wbuf_float[tid] += (1.0f             * (rnd < 0.25f)
@@ -242,10 +245,10 @@ static void update_go(const int pid, const int tid, const int index, const int t
                            +DECAY_AMPA_GOGR3 * (0.75f <= rnd));
       }
     }
-    sync_L1();
 
     // update gr state
     if (tid == 0) {
+      input = wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7];
       auto spk      = l_spk[tid];
       auto ll_u     = l_u[tid];    // ll is loaded local
       auto ll_g_ex  = l_g_ex[tid];
@@ -253,7 +256,7 @@ static void update_go(const int pid, const int tid, const int index, const int t
 
       // update conductances
       ll_g_ex *= DECAY_AMPA_GOGR;
-      ll_g_ex += wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3];
+      ll_g_ex += input;
       ll_g_ahp = ll_g_ahp * DECAY_AHP_GO * (!spk) + spk;
 
       // update v
