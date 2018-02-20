@@ -16,7 +16,8 @@ constexpr int N_GO = X_GO * Y_GO;
 constexpr int N_ALL = N_GR + N_GO + N_PKJ + N_ST + N_VN + N_IO;
 constexpr int N_MOL = N_PKJ + N_ST + N_VN + N_IO;
 
-constexpr int N_S_GR = N_GR >> 6;
+constexpr int N_S_GR   = N_GR   >> 6;
+constexpr int N_S_GR_2 = N_S_GR >> 1;
 constexpr int N_W_GR = N_GR >> 2;
 constexpr int X_GO_4 = X_GO >> 2;
 constexpr int Y_GO_4 = Y_GO >> 2;
@@ -183,7 +184,7 @@ constexpr bool  IO(int i) { return IDX_H_IO  <= i && i <  IDX_T_IO; }
 
 #define MAX_PID        (1984)
 #define MAX_TID        (8)
-#define STACK_SIZE     (1300)
+#define STACK_SIZE     (1280)
 constexpr int WORK_UNIT_SIZE = MAX_PID * MAX_TID;
 #define N_MAX_THREADS  (WORK_UNIT_SIZE)
 
