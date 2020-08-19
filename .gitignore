@@ -6,3 +6,6 @@ profile/
 *.spk.*.*
 log.*.*
 *.bak
+hosts
+log.4flops
+log2.4flops

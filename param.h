@@ -66,7 +66,7 @@ constexpr int Y_GO_2 = Y_GO >> 1;
 #define GBAR_AHP_GO  (20.0f) //4.2nS
 #define DECAY_AHP_GO (0.81873f) //exp(-(float)DT/tau_ahp_go);
 #define E_AHP_GO     (-72.7f)
-#define I_EX_GO      (3.0f)
+#define I_EX_GO      (6.0f)
 
 #define N_GR_PER_GO      (4)
 #define DECAY_AMPA_GOGR  (0.51342f) //exp(-(float)DT/tau_ampa_gogr);
@@ -97,7 +97,7 @@ constexpr int Y_GO_2 = Y_GO >> 1;
 #define DECAY_AMPA_PKJPF  (0.886493f) //exp(-(double)DT/tau_ampa_pkjpf);
 #define DECAY_AMPA_PKJPF2 (0.785790f)
 #define DECAY_AMPA_PKJPF3 (0.696668f)
-#define KAPPA_PKJPF       (3.0e-5f)   //3.0e-4f //(0.1*0.003)
+#define KAPPA_PKJPF       (6.0e-5f)   //3.0e-4f //(0.1*0.003)
 #define DECAY_GABA_PKJST  (0.904847f) //exp(-DT/tau_gaba_pkjst);
 #define DECAY_GABA_PKJST2 (0.818748f)
 #define DECAY_GABA_PKJST3 (0.740842f)
@@ -114,10 +114,10 @@ constexpr int GAMMA_PKJST = 0.333f * N_ST;
 #define GBAR_AHP_ST  (100.0f)     // nS
 #define E_AHP_ST     (-70.0f)     //E_LEAK_PKJ
 #define DECAY_AHP_ST (0.670320f)  //exp(-(double)DT/tau_ahp_st);
-#define I_EX_ST      (200.0f)
+#define I_EX_ST      (0.0f)
 
 #define DECAY_AMPA_STPF (0.886493f) //exp(-DT/tau_ampa_stpf);
-#define KAPPA_STPF      (1.5e-5f)
+#define KAPPA_STPF      (8.0e-6f)
 
 #define TH_VN        (-38.8f)     // mV
 #define C_VN         (122.3f)     // microF
@@ -132,12 +132,12 @@ constexpr int GAMMA_PKJST = 0.333f * N_ST;
 #define GBAR_AHP_VN  (50.0f)      //0.5
 #define E_AHP_VN     (-70.0f)     // mV
 #define DECAY_AHP_VN (0.81873f)   //exp(-DT/tau_ahp_cn);
-#define I_EX_VN      (500.0f)
+#define I_EX_VN      (4000.0f)
 
 #define DECAY_AMPA_VNMF  (0.43460f) //exp(-(float)DT/tau_ampa_grmf);
 #define DECAY_GABA_VNPKJ (0.904f)   //10.0 (exp (/ -1.0 10.0))
 #define R_AMPA_VNMF      (0.33f)    //0.66f
-#define GAMMA_VNPKJ      (0.275f)   //0.125f //(2.0/(N_PKJ))
+#define GAMMA_VNPKJ      (0.125f)   //0.125f //(2.0/(N_PKJ))
 
 #define TH_IO        (-50.0f)
 #define C_IO         (1.0f)
@@ -176,7 +176,13 @@ constexpr bool  ST(int i) { return IDX_H_ST  <= i && i <  IDX_T_ST; }
 constexpr bool  VN(int i) { return IDX_H_VN  <= i && i <  IDX_T_VN; }
 constexpr bool  IO(int i) { return IDX_H_IO  <= i && i <  IDX_T_IO; }
 
-#define N_TRIALS (1)
+#define MEM_TIME (12)
+#define INV_BYTE (0.00392157f)
+#define ALPHA    (0.1f)
+#define BETA     (0.0001f)
+#define WINIT    (1.0f)
+
+#define N_TRIALS (101)
 #define N_PERIOD (6000) // 6000 msec
 #define INV_N_PERIOD (0.00016666f) // 1/6000
 #define T_I (4)

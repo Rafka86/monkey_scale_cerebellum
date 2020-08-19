@@ -7,17 +7,18 @@
 constexpr unsigned int WBUFAD = STACK_SIZE * MAX_TID;
 constexpr unsigned int SEEDAD = WBUFAD + sizeof(float) * MAX_TID;
 #define LENGTH  (6)
-constexpr unsigned int UAD     = SEEDAD + sizeof(unsigned int)  * MAX_TID;
-constexpr unsigned int GEXAD   = UAD    + sizeof(float)         * LENGTH;
-constexpr unsigned int GINHAD  = GEXAD  + sizeof(float)         * LENGTH;
-constexpr unsigned int GAHPAD  = GINHAD + sizeof(float)         * LENGTH;
-constexpr unsigned int SPKAD   = GAHPAD + sizeof(float)         * LENGTH;
-constexpr unsigned int TAGAD   = SPKAD  + sizeof(unsigned char) * LENGTH;
-constexpr unsigned int WAD     = TAGAD  + sizeof(unsigned char) * 2;
-constexpr unsigned int GRSPKAD = WAD    + sizeof(unsigned int)  * 1280;
+constexpr unsigned int UAD    = SEEDAD + sizeof(unsigned int)  * MAX_TID;
+constexpr unsigned int GEXAD  = UAD    + sizeof(float)         * LENGTH;
+constexpr unsigned int GINHAD = GEXAD  + sizeof(float)         * LENGTH;
+constexpr unsigned int GAHPAD = GINHAD + sizeof(float)         * LENGTH;
+constexpr unsigned int SPKAD  = GAHPAD + sizeof(float)         * LENGTH;
+constexpr unsigned int TAGAD  = SPKAD  + sizeof(unsigned char) * LENGTH;
+constexpr unsigned int WAD    = TAGAD  + sizeof(unsigned char) * 2;
+constexpr unsigned int MEMAD  = WAD    + sizeof(unsigned int)  * 1280;
 
 #define wbuf_float ((float*)WBUFAD)
 #define wbuf_uchar ((unsigned char*)WBUFAD)
+#define wbuf_uint  ((unsigned int*)WBUFAD)
 #define wbuf_ulong ((unsigned long*)WBUFAD)
 #define seed       ((unsigned int*)SEEDAD)
 #define l_u        ((float*)UAD)
@@ -27,7 +28,7 @@ constexpr unsigned int GRSPKAD = WAD    + sizeof(unsigned int)  * 1280;
 #define l_spk      ((unsigned char*)SPKAD)
 #define tag        ((unsigned char*)TAGAD)
 #define l_w        ((unsigned int*)WAD)
-#define l_s_gr     ((unsigned long*)GRSPKAD)
+#define l_mem      ((unsigned int*)MEMAD)
 
 enum MolecularTag {
   MTAG_NONE,
@@ -100,6 +101,8 @@ void pzc_init_local_memory(const unsigned int* seeds, const unsigned int* w) {
   }
 
   if (tid == 0) {
+    l_mem[0] = 0;
+    l_mem[1] = 0;
     tag[0] = MTAG_NONE;
     tag[1] = 0;
     if (pref_id < 7) {
@@ -138,11 +141,81 @@ void pzc_fin_local_memory(float* debug) {
   else if (tid == 3) debug[idx] = l_g_ex[5];
   else if (tid == 4) debug[idx] = l_g_inh[5];
   else if (tid == 5) debug[idx] = l_g_ahp[5];
-  else if (tid == 6) debug[idx] = l_spk[5];
-  else if (tid == 7) debug[idx] = GRSPKAD;
+  else if (tid == 6) debug[idx] = l_w[0];
+  else if (tid == 7) debug[idx] = l_mem[0];
 
   flush();
   return;
+}
+
+void pzc_ltd(const unsigned long *s_gr_list,
+             const unsigned int head,
+                   unsigned int *w) {
+  unsigned short tid = get_tid();
+  unsigned short pid = get_pid();
+  unsigned short idx = pid * MAX_TID + tid;
+
+  for (unsigned char i = 0; i < MEM_TIME; i++) {
+    unsigned char t_index = (head - i + MEM_TIME) % MEM_TIME;
+
+    for (unsigned int j = idx; j < N_S_GR; j += N_MAX_THREADS) {
+      const unsigned long *s_gr = &s_gr_list[N_S_GR * t_index + j];
+
+      for (unsigned char k = 0; k < 16; k++) {
+        unsigned int w_all = w[j * 16 + k];
+
+        unsigned char s[4];
+        s[0] = get_spike(*s_gr, 4 * k    );
+        s[1] = get_spike(*s_gr, 4 * k + 1);
+        s[2] = get_spike(*s_gr, 4 * k + 2);
+        s[3] = get_spike(*s_gr, 4 * k + 3);
+
+        float w_tmp[4];
+        w_tmp[0] = ( w_all        & 0xFF) * INV_BYTE;
+        w_tmp[1] = ((w_all >>  8) & 0xFF) * INV_BYTE;
+        w_tmp[2] = ((w_all >> 16) & 0xFF) * INV_BYTE;
+        w_tmp[3] = ((w_all >> 24) & 0xFF) * INV_BYTE;
+        
+        w_tmp[0] -= w_tmp[0] * ALPHA * s[0];
+        w_tmp[1] -= w_tmp[1] * ALPHA * s[1];
+        w_tmp[2] -= w_tmp[2] * ALPHA * s[2];
+        w_tmp[3] -= w_tmp[3] * ALPHA * s[3];
+
+        s[3] = (int)(w_tmp[0] * 255) & 0xFF;
+        s[2] = (int)(w_tmp[1] * 255) & 0xFF;
+        s[1] = (int)(w_tmp[2] * 255) & 0xFF;
+        s[0] = (int)(w_tmp[3] * 255) & 0xFF;
+
+        w[j * 16 + k] = *((unsigned int*)s);
+      }
+    }
+    flush_L2();
+  }
+  flush();
+  //short base = 64*tid + 256*pid;
+  //for (unsigned char i = 0; i < 32; i++) {
+  //  unsigned int wall = w[i + base];
+
+  //  for (unsigned char j = 0; j < 32; j++) {
+  //    int target = i + base + 262144*j;
+  //    if (802816 <= target && target <= 2523136)
+  //      w[i + base + 262144*j] = wall;
+  //  }
+  //}
+  //flush();
+  auto pref_id  = pid >> 8;
+  auto pid_pref = pid & 255;
+  auto x = pid_pref & 31;
+  auto y = pid_pref >> 5;
+  for (auto i = 0; i < 5; i++) {
+    auto ax = x + X_GO_4;
+    auto ay = y + (pref_id + i * 7) - 4 + Y_GO_4;
+    auto cluster_id = ay * (X_GO + X_GO_2) + ax;
+    if (cluster_id > (X_GO + X_GO_2) * (Y_GO + Y_GO_2)) break;
+
+    for (auto j = tid; j < 256; j++)
+      l_w[i * 256 + j] = w[cluster_id * 256 + j];
+  }
 }
 
 static void update_gr(const int pid, const int tid, const int index, const int t_e, const int t_i,
@@ -150,28 +223,27 @@ static void update_gr(const int pid, const int tid, const int index, const int t
                       const unsigned short* list_grgo, const unsigned char* s_go) {
   auto wbuf_i = 7 - tid;
   auto inh_input = &wbuf_float[2];
-  auto count = 0;
-  auto mf_firing_rate = 0.03f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD));
+  auto mf_firing_rate = 0.03f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD)); //6*8Thread*1984PE=95232
   for (auto i = pid; i < N_S_GR; i += MAX_PID) {
     //calc input from go
     {
       auto gr_group_id = i >> 4;
 
       auto idx = list_grgo[gr_group_id * N_GO + tid];
-      auto rnd = genrand(tid);
+      auto rnd = genrand(tid); //1
       wbuf_float[tid] = (1.0f              * (rnd < 0.25f)
                         +DECAY_GABA1_GRGO  * (0.25f <= rnd && rnd < 0.5f)
                         +DECAY_GABA1_GRGO2 * (0.5f <= rnd && rnd < 0.75f)
-                        +DECAY_GABA1_GRGO3 * (0.75f <= rnd)) * R_GABA1_GRGO * s_go[idx];
+                        +DECAY_GABA1_GRGO3 * (0.75f <= rnd)) * R_GABA1_GRGO * s_go[idx]; //9
 
       sync_L1();
       if (tid == 0) {
-        *inh_input = wbuf_float[0] + wbuf_float[1] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7];
-        *inh_input *= GAMMA;
-      } 
-    }
+        *inh_input += wbuf_float[0] + wbuf_float[1] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7]; //7
+        *inh_input *= GAMMA; //1
+      } //8
+    } //10*8Thread+8=88
 
-    auto spk_block = s_gr[pid * 9 + i];
+    auto spk_block = s_gr[i];
     wbuf_uchar[wbuf_i] = 0;
 
     sync_L1();
@@ -184,40 +256,39 @@ static void update_gr(const int pid, const int tid, const int index, const int t
       auto ll_g_ahp = g_ahp[target_neuron_id];
 
       // update conductances
-      ll_g_ahp = ll_g_ahp * DECAY_AHP_GR * (!spk) + spk;
-      ll_g_ex *= DECAY_AMPA_GRMF;
+      ll_g_ahp = ll_g_ahp * DECAY_AHP_GR * (!spk) + spk; //3
+      ll_g_ex *= DECAY_AMPA_GRMF; //1
       auto sum = 0;
-      for (auto k = 0; k < N_MF_PER_GR; k++)
-        sum += genrand(tid) < (mf_firing_rate * (k == 0) + 0.005 * (k != 0));
-      ll_g_ex += LAMBDA * R_AMPA_GRMF * (float)sum;
-      ll_g_inh *= DECAY_GABA1_GRGO;
-      ll_g_inh += *inh_input;
+      for (auto k = 0; k < N_MF_PER_GR; k++) //20
+        sum += genrand(tid) < (mf_firing_rate * (k == 0) + 0.005f * (k != 0)); //5
+      ll_g_ex += LAMBDA * R_AMPA_GRMF * (float)sum; //3
+      ll_g_inh *= DECAY_GABA1_GRGO; //1
+      ll_g_inh += *inh_input; //1 //29
 
       // update v
       auto du1 = DT * INV_C_GR * (-GBAR_LEAK_GR            * (ll_u - E_LEAK_GR)
                                   -GBAR_EX_GR   * ll_g_ex  * (ll_u - E_EX_GR)
                                   -GBAR_INH_GR  * ll_g_inh * (ll_u - E_INH_GR)
                                   -GBAR_AHP_GR  * ll_g_ahp * (ll_u - E_AHP_GR)
-                                  +I_EX_GR);
+                                  +I_EX_GR); //17
       auto du2 = DT * INV_C_GR * (-GBAR_LEAK_GR            * (ll_u + du1 - E_LEAK_GR)
                                   -GBAR_EX_GR   * ll_g_ex  * (ll_u + du1 - E_EX_GR)
                                   -GBAR_INH_GR  * ll_g_inh * (ll_u + du1 - E_INH_GR)
                                   -GBAR_AHP_GR  * ll_g_ahp * (ll_u + du1 - E_AHP_GR)
-                                  +I_EX_GR);
-      ll_u += 0.5f * (du1 + du2);
+                                  +I_EX_GR); //21 //38
+      ll_u += 0.5f * (du1 + du2); //3
       spk = ll_u > TH_GR;
-      u[target_neuron_id]     = E_LEAK_GR * spk + ll_u * (!spk);
+      u[target_neuron_id]     = E_LEAK_GR * spk + ll_u * (!spk); //3
       g_ex[target_neuron_id]  = ll_g_ex;
       g_inh[target_neuron_id] = ll_g_inh;
       g_ahp[target_neuron_id] = ll_g_ahp;
       wbuf_uchar[7 - tid] |= (spk << j);
-    }
+    } //73*8=584*8Thread=4672
     sync_L1();
-    if (tid == 0) l_s_gr[count++] = wbuf_ulong[0];
-  }
-  for (auto i = tid; i < 9 && pid + MAX_PID * i < N_S_GR; i += MAX_TID)
-    s_gr[pid + MAX_PID * i] = l_s_gr[i];
-}
+    if (tid == 0) s_gr[i] = wbuf_ulong[0];
+    flush_L1();
+  } //(4672+88)*N_S_GR(16384)=77987840
+} //77987840+95232=78083072
 
 static void update_go(const int pid, const int tid, const int index, const int t_e, const int t_i,
                       unsigned char* s_go, const unsigned short* list_gogr, const unsigned long* s_gr) {
@@ -237,46 +308,47 @@ static void update_go(const int pid, const int tid, const int index, const int t
       spikes_gr += popl(sp[tid          ]);
       spikes_gr += popl(sp[tid + MAX_TID]);
       chgthread();
+      //l_mem[0] += spikes_gr;
       for (auto k = 0; k < spikes_gr; k++) {
         auto rnd = genrand(tid);
         wbuf_float[tid] += (1.0f             * (rnd < 0.25f)
                            +DECAY_AMPA_GOGR  * (0.25f <= rnd && rnd < 0.5f)
                            +DECAY_AMPA_GOGR2 * (0.5f <= rnd && rnd < 0.75f)
-                           +DECAY_AMPA_GOGR3 * (0.75f <= rnd));
-      }
-    }
+                           +DECAY_AMPA_GOGR3 * (0.75f <= rnd)); //8
+      } //51267708(counted total local_fin.log)*9=461409372
+    } //461409372*N_GR_PER_GO(4)=1845637488(add this num finally)
 
     // update gr state
     if (tid == 0) {
-      input = wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7];
+      input = wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7]; //7
       auto spk      = l_spk[tid];
       auto ll_u     = l_u[tid];    // ll is loaded local
       auto ll_g_ex  = l_g_ex[tid];
       auto ll_g_ahp = l_g_ahp[tid];
 
       // update conductances
-      ll_g_ex *= DECAY_AMPA_GOGR;
-      ll_g_ex += input;
-      ll_g_ahp = ll_g_ahp * DECAY_AHP_GO * (!spk) + spk;
+      ll_g_ex *= DECAY_AMPA_GOGR; //1
+      ll_g_ex += input; //1
+      ll_g_ahp = ll_g_ahp * DECAY_AHP_GO * (!spk) + spk; //3
 
       // update v
       auto du1 = DT * INV_C_GO * (-GBAR_LEAK_GO                         * (ll_u - E_LEAK_GO)
                                   -GBAR_EX_GO   * KAPPA_GOGR * ll_g_ex  * (ll_u - E_EX_GO)
                                   -GBAR_AHP_GO               * ll_g_ahp * (ll_u - E_AHP_GO)
-                                  +I_EX_GO);
+                                  +I_EX_GO); //14
       auto du2 = DT * INV_C_GO * (-GBAR_LEAK_GO                         * (ll_u + du1 - E_LEAK_GO)
                                   -GBAR_EX_GO   * KAPPA_GOGR * ll_g_ex  * (ll_u + du1 - E_EX_GO)
                                   -GBAR_AHP_GO               * ll_g_ahp * (ll_u + du1 - E_AHP_GO)
-                                  +I_EX_GO);
-      ll_u += 0.5f * (du1 + du2);
+                                  +I_EX_GO); //17
+      ll_u += 0.5f * (du1 + du2); //3
       spk = ll_u > TH_GO;
-      l_u[tid]     = E_LEAK_GO * spk + ll_u * (!spk);
+      l_u[tid]     = E_LEAK_GO * spk + ll_u * (!spk); //3
       l_g_ex[tid]  = ll_g_ex;
       l_g_ahp[tid] = ll_g_ahp;
       l_spk[tid]   = spk;
       s_go[target_neuron_id - IDX_H_GO] = spk;
-    }
-  }
+    } //49
+  } //49*N_GO(1024)=50176
   flush_L1();
 }
 
@@ -303,17 +375,25 @@ static inline void calc_input_pkjgr_sub(const int pid_pref, const int tid, const
                       +((w_all >> 16) & 0xff) * z[2]
                       +((w_all >> 24) & 0xff) * z[3]);
     auto coef = 0.0f;
+    l_mem[1] += z[0] + z[1] + z[2] + z[3];
     for (auto l = 0; l < z[0] + z[1] + z[2] + z[3]; l++) {
       auto rnd = genrand(tid);
       coef += (             1.0f * (                rnd < 0.25f)
               +DECAY_AMPA_PKJPF  * (0.25f <= rnd && rnd < 0.5f )
               +DECAY_AMPA_PKJPF2 * (0.5f  <= rnd && rnd < 0.75f)
               +DECAY_AMPA_PKJPF3 * (0.75f <= rnd));
-    }
-    local_sum += KAPPA_PKJPF * 0.0009766f * part_input * coef;
+    } //9
+    //for (auto l = 0; l < 4; l++) {
+    //  auto rnd = genrand(tid);
+    //  coef += (             1.0f * (                rnd < 0.25f)
+    //          +DECAY_AMPA_PKJPF  * (0.25f <= rnd && rnd < 0.5f )
+    //          +DECAY_AMPA_PKJPF2 * (0.5f  <= rnd && rnd < 0.75f)
+    //          +DECAY_AMPA_PKJPF3 * (0.75f <= rnd)) * z[l];
+    //} //10*4=40
+    local_sum += KAPPA_PKJPF * 0.0009766f * part_input * coef; //4
   }
-  wbuf_float[tid] += local_sum;
-}
+  wbuf_float[tid] += local_sum; //1
+} //5
 
 static void calc_input_pkjgr(const int pid, const int tid, 
                              float* sum, const unsigned long* s_gr, const unsigned long* s_gr_rect) {
@@ -324,25 +404,25 @@ static void calc_input_pkjgr(const int pid, const int tid,
   auto count = 0;
   for (auto pkj_id = pref_id; pkj_id < N_PKJ; pkj_id += 7) {
     wbuf_float[tid] = 0.0f;
-    calc_input_pkjgr_sub(pid_pref, tid, count,      0, pkj_id, s_gr, s_gr_rect);
-    calc_input_pkjgr_sub(pid_pref, tid, count, OFFSET, pkj_id, s_gr, s_gr_rect);
-    if (tid == 0) sum[pid] = wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7];
+    calc_input_pkjgr_sub(pid_pref, tid, count,      0, pkj_id, s_gr, s_gr_rect); //5*8Thread*1792PE=71680
+    calc_input_pkjgr_sub(pid_pref, tid, count, OFFSET, pkj_id, s_gr, s_gr_rect); //71680
+    if (tid == 0) sum[pid] = wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7]; //7*1792=12544
     flush_L2();
     if (pid_pref < 16) {
       auto base = 256 * pref_id + 16 * pid_pref;
-      wbuf_float[tid] = sum[tid + base] + sum[tid + OFFSET + base];
+      wbuf_float[tid] = sum[tid + base] + sum[tid + OFFSET + base]; //1*8Thread
       sync_L1();
       if (tid == 0) sum[pid] = wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7];
-    }
-    flush_L1();
+    } //8+7=15*16=240
+    flush_L2();
     if (tag[0] == MTAG_PKJ && tag[1] == pkj_id) {
       auto base = 256 * pref_id;
-      wbuf_float[tid] = sum[tid + base] + sum[tid + OFFSET + base];
+      wbuf_float[tid] = sum[tid + base] + sum[tid + OFFSET + base]; //1*8Thread
       sync_L1();
-      if (tid == 0) l_g_ex[5] = wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7];
-    }
+      if (tid == 0) l_g_ex[5] += wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7];
+    } //8+7=15
     count++;
-  }
+  } //71680*2+12544+240+15=156159*N_PKJ(32)=4997088
 }
 
 static void calc_input_stgr(const int pid, const int tid,
@@ -358,26 +438,26 @@ static void calc_input_stgr(const int pid, const int tid,
     auto use_rect = y < 0 || y <= Y_GO;
     auto idx = use_rect ? (y + Y_GO_4) * (X_GO + X_GO_2) + (x + X_GO_4) : y * X_GO + x;
     sync_L1();
-    auto local_sum  = KAPPA_STPF * popl(use_rect ? s_gr_rect[idx * 16 + tid         ] : s_gr[idx * 16 + tid         ]);
-         local_sum += KAPPA_STPF * popl(use_rect ? s_gr_rect[idx * 16 + tid + OFFSET] : s_gr[idx * 16 + tid + OFFSET]);
+    auto local_sum  = KAPPA_STPF * popl(use_rect ? s_gr_rect[idx * 16 + tid         ] : s_gr[idx * 16 + tid         ]); //1*8Thread*1792PE=14336
+         local_sum += KAPPA_STPF * popl(use_rect ? s_gr_rect[idx * 16 + tid + OFFSET] : s_gr[idx * 16 + tid + OFFSET]); //2*8Thread*1792PE=28672
     wbuf_float[tid] = local_sum;
-    if (tid == 0) sum[pid] = wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7];
+    if (tid == 0) sum[pid] = wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7]; //7*1792PE=12544
     flush_L2();
     if (pid_pref < 16) {
       auto base = 256 * pref_id + 16 * pid_pref;
       wbuf_float[tid] = sum[tid + base] + sum[tid + OFFSET + base];
       sync_L1();
       if (tid == 0) sum[pid] = wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7];
-    }
-    flush_L1();
+    } //240
+    flush_L2();
     if (tag[0] == MTAG_ST && tag[1] == st_id + N_PKJ) {
       auto base = 256 * pref_id;
       wbuf_float[tid] = sum[tid + base] + sum[tid + OFFSET + base];
       sync_L1();
-      if (tid == 0) l_g_ex[5] = wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7];
-    }
+      if (tid == 0) l_g_ex[5] += wbuf_float[0] + wbuf_float[1] + wbuf_float[2] + wbuf_float[3] + wbuf_float[4] + wbuf_float[5] + wbuf_float[6] + wbuf_float[7];
+    } //15
     count++;
-  }
+  } //14336+28672+12544+240+15=55807*N_ST(32)=1785824
 }
 
 static void update_mol(const int pid, const int tid, const int index, const int t_i, const int t_e,
@@ -392,7 +472,7 @@ static void update_mol(const int pid, const int tid, const int index, const int 
       auto ll_g_inh = l_g_inh[5];
       auto ll_g_ahp = l_g_ahp[5];
 
-      // Load const params
+      // Load const params //7*12+10(ex)+9(inh)=103
       auto inv_c = (PKJ(nid) * (INV_C_PKJ)
                    + ST(nid) * (INV_C_ST)
                    + VN(nid) * (INV_C_VN)
@@ -445,65 +525,65 @@ static void update_mol(const int pid, const int tid, const int index, const int 
                        + ST(nid) * (DECAY_AHP_ST)
                        + VN(nid) * (DECAY_AHP_VN)
                        + IO(nid) * (DECAY_AHP_IO));
-      auto i_ex = (PKJ(nid) * (I_EX_PKJ)
-                  + ST(nid) * (I_EX_ST)
-                  + VN(nid) * (I_EX_VN)
-                  + IO(nid) * (I_EX_IO));
+      auto i_ex = (0.7f * PKJ(nid) * (I_EX_PKJ)
+                  +0.7f *  ST(nid) * (I_EX_ST)
+                  +0.1f *  VN(nid) * (I_EX_VN)
+                  +1.0f *  IO(nid) * (I_EX_IO));
 
       // update conductances
       switch (tag[0]) {
-        case MTAG_PKJ: {
+        case MTAG_PKJ: { //11
           auto rnd = genrand(tid);
           auto coef = (             1.0f * (                rnd < 0.25f)
                       +DECAY_GABA_PKJST  * (0.25f <= rnd && rnd < 0.5f )
                       +DECAY_GABA_PKJST2 * (0.5f  <= rnd && rnd < 0.75f)
-                      +DECAY_GABA_PKJST3 * (0.75f <= rnd));
-          ll_g_inh += GAMMA_PKJST * s_mol[tag[1] + N_PKJ] * coef;
+                      +DECAY_GABA_PKJST3 * (0.75f <= rnd)); //7
+          ll_g_inh += 1.2f * GAMMA_PKJST * s_mol[tag[1] + N_PKJ] * coef; //3
         } break;
         case MTAG_ST: {
         } break;
-        case MTAG_VN: {
+        case MTAG_VN: { //6+128+2+1=137
           auto s = 0;
-          auto mf_firing_rate = 0.03f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD));
+          auto mf_firing_rate = 0.03f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD)); //6
           auto sum = 0.0f;
           for (auto i = 0; i < N_PKJ; i++) {
             sum += R_AMPA_VNMF * (genrand(tid) < mf_firing_rate) * 0.03125f; //0.03125f = 1/32
             s += s_mol[i];
-          }
-          ll_g_inh += GAMMA_VNPKJ * s;
-          ll_g_ex += sum;
+          } //4*N_PKJ(32)=128
+          ll_g_inh += GAMMA_VNPKJ * s; //2
+          ll_g_ex += sum; //1
         } break;
-        case MTAG_IO: {
+        case MTAG_IO: { //8
           auto mf_firing_rate = 0.003f * 0.5f * (1.0f - cos(2.0f * 3.141592653f * (t_e + t_i) * INV_N_PERIOD));
           ll_g_ex += (genrand(tid) < mf_firing_rate);
         } break;
       }
 
-      // update v
+      // update v //17+21+11=49
       auto du1 = DT * inv_c * (-gbar_leak            * (ll_u - e_leak)
                                -gbar_ex   * ll_g_ex  * (ll_u - e_ex)
                                -gbar_inh  * ll_g_inh * (ll_u - e_inh)
                                -gbar_ahp  * ll_g_ahp * (ll_u - e_ahp)
-                               +i_ex);
+                               +i_ex); //17
       auto du2 = DT * inv_c * (-gbar_leak            * (ll_u + du1 - e_leak)
                                -gbar_ex   * ll_g_ex  * (ll_u + du1 - e_ex)
                                -gbar_inh  * ll_g_inh * (ll_u + du1 - e_inh)
                                -gbar_ahp  * ll_g_ahp * (ll_u + du1 - e_ahp)
-                               +i_ex);
+                               +i_ex); //21
 
-      ll_u += 0.5f * (du1 + du2);
+      ll_u += 0.5f * (du1 + du2); //3
       spk = ll_u > th;
-      ll_g_ex *= decay_ex;
-      ll_g_inh *= decay_inh;
-      ll_g_ahp = ll_g_ahp * decay_ahp * (!spk) + spk;
-      l_u[5]        = e_leak * spk + ll_u * (!spk);
+      ll_g_ex *= decay_ex; //1
+      ll_g_inh *= decay_inh; //1
+      ll_g_ahp = ll_g_ahp * decay_ahp * (!spk) + spk; //3
+      l_u[5]        = e_leak * spk + ll_u * (!spk); //3
       l_g_ex[5]     = ll_g_ex;
       l_g_inh[5]    = ll_g_inh;
       l_g_ahp[5]    = ll_g_ahp;
       l_spk[5]      = spk;
       s_mol[tag[1]] = spk;
     }
-  }
+  } //103*N_MOL(66)+11*N_PKJ+137+8+49*N_MOL=10529
   flush_L1();
 }
 
@@ -598,6 +678,53 @@ void pzc_kernel(unsigned short* lists,
       stc.Update();
     }
 #endif
+    if ((t_e + t_i + 1) % 1000 == 0) {
+      for (unsigned int i = index; i < N_S_GR; i += N_MAX_THREADS) {
+        const unsigned long *spk = &s_gr[i];
+
+        for (unsigned char k = 0; k < 16; k++) {
+          unsigned int w_all = w[i * 16 + k];
+
+          unsigned char s[4];
+          s[0] = get_spike(*spk, 4 * k    );
+          s[1] = get_spike(*spk, 4 * k + 1);
+          s[2] = get_spike(*spk, 4 * k + 2);
+          s[3] = get_spike(*spk, 4 * k + 3);
+
+          float w_tmp[4];
+          w_tmp[0] = ( w_all        & 0xFF) * INV_BYTE;
+          w_tmp[1] = ((w_all >>  8) & 0xFF) * INV_BYTE;
+          w_tmp[2] = ((w_all >> 16) & 0xFF) * INV_BYTE;
+          w_tmp[3] = ((w_all >> 24) & 0xFF) * INV_BYTE;
+          
+          w_tmp[0] += (WINIT - w_tmp[0]) * BETA * s[0];
+          w_tmp[1] += (WINIT - w_tmp[1]) * BETA * s[1];
+          w_tmp[2] += (WINIT - w_tmp[2]) * BETA * s[2];
+          w_tmp[3] += (WINIT - w_tmp[3]) * BETA * s[3];
+
+          s[3] = (int)(w_tmp[0] * 255) & 0xFF;
+          s[2] = (int)(w_tmp[1] * 255) & 0xFF;
+          s[1] = (int)(w_tmp[2] * 255) & 0xFF;
+          s[0] = (int)(w_tmp[3] * 255) & 0xFF;
+
+          w[i * 16 + k] = *((unsigned int*)s);
+        }
+      }
+      flush();
+      auto pref_id  = pid >> 8;
+      auto pid_pref = pid & 255;
+      auto x = pid_pref & 31;
+      auto y = pid_pref >> 5;
+      for (auto i = 0; i < 5; i++) {
+        auto ax = x + X_GO_4;
+        auto ay = y + (pref_id + i * 7) - 4 + Y_GO_4;
+        auto cluster_id = ay * (X_GO + X_GO_2) + ax;
+        if (cluster_id > (X_GO + X_GO_2) * (Y_GO + Y_GO_2)) break;
+
+        for (auto j = tid; j < 256; j++)
+          l_w[i * 256 + j] = w[cluster_id * 256 + j];
+      }
+    }
 #ifdef PRINT
     {
       store_spikes(pid, tid, index, t_i, spikep_buf, s_gr, s_go, s_mol);
